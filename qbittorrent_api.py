@@ -79,6 +79,22 @@ class QBittorrentAPI:
                 pass
             finally:
                 self.session = None
+    
+    def remove_torrent(self, infohash: str, delete_files: bool = False) -> bool:
+        """Remove a torrent from qBittorrent by infohash. Optionally delete files."""
+        if not self.session:
+            return False
+        
+        try:
+            data = {
+                'hashes': infohash,
+                'deleteFiles': 'true' if delete_files else 'false'
+            }
+            response = self.session.post(f"{self.host}/api/v2/torrents/delete", data=data)
+            return response.status_code == 200
+        except Exception as e:
+            print(f"❌ Error removing torrent: {e}")
+            return False
 
 
 # Global instance for backward compatibility
@@ -110,3 +126,17 @@ def qb_get_torrent_info(session: requests.Session) -> List[Dict[str, Any]]:
 def qb_check_connection() -> bool:
     """Check if qBittorrent is accessible. (Legacy function)"""
     return _qb_api.check_connection()
+
+
+def qb_remove_torrent(session: requests.Session, infohash: str, delete_files: bool = False) -> bool:
+    """Remove a torrent from qBittorrent by infohash. Optionally delete files."""
+    try:
+        data = {
+            'hashes': infohash,
+            'deleteFiles': 'true' if delete_files else 'false'
+        }
+        response = session.post(f"{QBITTORRENT_URL}/api/v2/torrents/delete", data=data)
+        return response.status_code == 200
+    except Exception as e:
+        print(f"❌ Error removing torrent: {e}")
+        return False

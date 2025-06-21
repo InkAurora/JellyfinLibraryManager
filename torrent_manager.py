@@ -3,11 +3,19 @@ Torrent management module for the Jellyfin Library Manager.
 """
 
 import os
+import re
 from typing import List, Dict, Any, Tuple, Optional
 from qbittorrent_api import qb_check_connection, qb_login, qb_get_torrent_info
 from database import get_tracked_torrents, update_torrent_status
 from utils import is_episode_file, get_anime_folder
 from file_utils import create_anime_symlinks
+from ffprobe_utils import probe_video_duration
+
+
+def sanitize_filename(name: str) -> str:
+    """Replace forbidden characters in a single filename or folder name with a space."""
+    forbidden = r'[\\/:*?"<>|]'
+    return re.sub(forbidden, ' ', name).strip()
 
 
 class TorrentManager:
@@ -73,54 +81,81 @@ class TorrentManager:
     
     def sort_torrent_files_for_jellyfin(self, torrent: Dict[str, Any], download_path: str) -> Optional[Dict[str, Any]]:
         """
-        Sorts and organizes the torrent's files into a folder structure compatible with Jellyfin.
-        Returns a file structure dictionary describing the desired layout:
-        {
-            'root': '/path/to/anime',
-            'folders': [
-                {'path': '/path/to/anime/Season 01', 'files': [
-                    {'source': '/downloads/ep1.mkv', 'target': '/path/to/anime/Season 01/ep1.mkv'},
-                    ...
-                ]},
-                ...
-            ]
-        }
-        This structure can be customized by plugins.
+        Sorts and organizes the torrent's files into a folder structure compatible with Jellyfin, using pattern matching and ffprobe.
+        Only the anime title is sanitized for forbidden characters.
         """
         anilist_info = torrent.get('anilist_info', {})
-        anime_title = anilist_info.get('title', 'Unknown Anime')
+        anime_title = sanitize_filename(anilist_info.get('title', 'Unknown Anime'))
         anime_base_folder = get_anime_folder()
         anime_main_folder = os.path.join(anime_base_folder, anime_title)
-        season_folder = os.path.join(anime_main_folder, "Season 01")
-        file_structure = {
-            'root': anime_main_folder,
-            'folders': []
-        }
-        episode_files = []
-        source_folder = download_path
-        if os.path.isfile(download_path):
-            if is_episode_file(download_path):
-                episode_files.append(os.path.basename(download_path))
-                source_folder = os.path.dirname(download_path)
-        else:
-            try:
-                items_in_torrent_folder = os.listdir(download_path)
-                for item in items_in_torrent_folder:
-                    item_path = os.path.join(download_path, item)
-                    if os.path.isfile(item_path) and is_episode_file(item):
-                        episode_files.append(item)
-            except Exception:
-                return None
-        folder_entry = {
-            'path': season_folder,
-            'files': []
-        }
-        for episode_file in episode_files:
-            folder_entry['files'].append({
-                'source': os.path.join(source_folder, episode_file),
-                'target': os.path.join(season_folder, episode_file)
-            })
-        file_structure['folders'].append(folder_entry)
+        file_structure = {'root': anime_main_folder, 'folders': []}
+        # Helper regexes
+        season_regex = re.compile(r'(season[ _-]?(\d+)|s(\d{1,2}))(?!\d)', re.IGNORECASE)
+        specials_regex = re.compile(r'(special|extra|ova|sp|nced|ncop)', re.IGNORECASE)
+        # Walk the torrent directory
+        folder_map = {}
+        for root, dirs, files in os.walk(download_path):
+            rel_root = os.path.relpath(root, download_path)
+            # Only sanitize each part, skip empty or '.'
+            rel_parts = [part for part in rel_root.split(os.sep) if part and part != '.']
+            for file in files:
+                if not is_episode_file(file):
+                    continue
+                file_path = os.path.join(root, file)
+                # ffprobe: check if movie
+                duration = probe_video_duration(file_path)
+                # Files longer than 40 minutes go to Movies
+                if duration and duration > 40 * 60:
+                    movies_folder = os.path.join(anime_main_folder, 'Movies')
+                    folder_map.setdefault(movies_folder, []).append({'source': file_path, 'target': os.path.join(movies_folder, file)})
+                    continue
+                # Find best matching folder for season/specials
+                best_folder = None
+                best_type = None
+                best_season = None
+                # Check all parent folders, deepest first
+                parts = rel_root.split(os.sep)
+                for i in range(len(rel_parts), 0, -1):
+                    folder_name = rel_parts[i-1]
+                    # Season
+                    season_match = season_regex.search(folder_name)
+                    if season_match:
+                        season_num = season_match.group(2) or season_match.group(3)
+                        if season_num:
+                            season_folder = os.path.join(anime_main_folder, f'Season {int(season_num):02d}')
+                            best_folder = season_folder
+                            best_type = 'season'
+                            best_season = int(season_num)
+                            break
+                    # Specials
+                    if specials_regex.search(folder_name):
+                        specials_folder = os.path.join(anime_main_folder, 'Season 00')
+                        best_folder = specials_folder
+                        best_type = 'specials'
+                        break
+                # If not found by folder, try file name
+                if not best_folder:
+                    # Season in file name
+                    season_match = season_regex.search(file)
+                    if season_match:
+                        season_num = season_match.group(2) or season_match.group(3)
+                        if season_num:
+                            best_folder = os.path.join(anime_main_folder, f'Season {int(season_num):02d}')
+                            best_type = 'season'
+                            best_season = int(season_num)
+                    # Specials in file name
+                    elif specials_regex.search(file):
+                        best_folder = os.path.join(anime_main_folder, 'Season 00')
+                        best_type = 'specials'
+                # Default to Season 01
+                if not best_folder:
+                    best_folder = os.path.join(anime_main_folder, 'Season 01')
+                    best_type = 'season'
+                    best_season = 1
+                folder_map.setdefault(best_folder, []).append({'source': file_path, 'target': os.path.join(best_folder, file)})
+        # Build file_structure
+        for folder, files in folder_map.items():
+            file_structure['folders'].append({'path': folder, 'files': files})
         return file_structure
 
     def add_completed_torrent_to_library(self, torrent: Dict[str, Any], download_path: str) -> bool:

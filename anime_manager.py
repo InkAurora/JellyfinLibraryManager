@@ -356,12 +356,34 @@ class AnimeManager:
         print()
         
         success = qb_add_torrent(session, selected_torrent['link'], download_path)
-        
+        # After adding, get the torrent info from qBittorrent to determine the actual folder
+        actual_torrent_folder = None
         if success:
+            import time
+            time.sleep(2)  # Wait a moment for qBittorrent to register the new torrent
+            qb_torrents = session.get(f"{QBITTORRENT_URL}/api/v2/torrents/info").json()
+            # Try to match by infohash first
+            for qb_torrent in qb_torrents:
+                if qb_torrent.get('hash', '').lower() == selected_torrent.get('infohash', '').lower():
+                    save_path = qb_torrent.get('save_path', download_path or 'Default')
+                    name = qb_torrent.get('name', selected_torrent.get('title', 'Unknown'))
+                    actual_torrent_folder = os.path.join(save_path, name)
+                    break
+            # If not found by infohash, try to match by name and size
+            if not actual_torrent_folder:
+                for qb_torrent in qb_torrents:
+                    if (qb_torrent.get('name', '').lower() == selected_torrent.get('title', '').lower() and
+                        abs(qb_torrent.get('size', 0) - int(selected_torrent.get('size', '0').split()[0].replace('.', '').replace('GiB', '').replace('MiB', ''))) < 100000000):
+                        save_path = qb_torrent.get('save_path', download_path or 'Default')
+                        name = qb_torrent.get('name', selected_torrent.get('title', 'Unknown'))
+                        actual_torrent_folder = os.path.join(save_path, name)
+                        break
             # Add torrent to tracking database
             torrent_db_info = selected_torrent.copy()
-            torrent_db_info["download_path"] = download_path or "Default"
-            
+            if actual_torrent_folder:
+                torrent_db_info["download_path"] = actual_torrent_folder
+            else:
+                torrent_db_info["download_path"] = download_path or "Default"
             torrent_id = add_torrent_to_database(torrent_db_info)
             clear_screen()
             print("✅ Torrent added successfully!")
@@ -369,29 +391,13 @@ class AnimeManager:
             print(f"📊 Size: {selected_torrent['size']}")
             if download_path:
                 print(f"📁 Location: {download_path}")
-            
             if torrent_id:
                 print(f"🗃️  Database ID: #{torrent_id}")
                 print("🗄️ Torrent added to tracking database")
                 print("💡 You can monitor download progress in 'View tracked torrents'")
             else:
                 print("⚠️  Warning: Could not save to tracking database")
-            
             print()
-            print("🔄 Torrent is now downloading in qBittorrent")
-            
-            # Show recent torrents
-            from qbittorrent_api import qb_get_torrent_info
-            print("\n🔄 Recent torrents in qBittorrent:")
-            torrents = qb_get_torrent_info(session)
-            if torrents:
-                for i, torrent in enumerate(torrents[-3:], 1):  # Show last 3 torrents
-                    state = torrent.get('state', 'unknown')
-                    progress = torrent.get('progress', 0) * 100
-                    print(f"  {i}. {torrent.get('name', 'Unknown')[:50]}...")
-                    print(f"     State: {state} | Progress: {progress:.1f}%")
-            
-            wait_for_enter()
             return True
         else:
             self.menu_system.show_error(
@@ -500,20 +506,24 @@ class AnimeManager:
             clear_screen()
             print(f"✅ Removed anime '{anime_name}' from library.")
 
-            # Check for associated torrent
+            # Check for associated torrent (match using full torrent folder path)
             from database import TorrentDatabase
             from qbittorrent_api import qb_login, qb_remove_torrent
             torrent_db = TorrentDatabase()
             tracked_torrents = torrent_db.get_tracked_torrents()
             associated_torrent = None
             for torrent in tracked_torrents:
-                if (
-                    torrent.get("download_path") == target_path or
-                    os.path.abspath(torrent.get("download_path", "")) == os.path.abspath(target_path)
-                ):
+                # Try to match using full torrent folder path (download_path + qb_name)
+                torrent_folder = os.path.join(torrent.get("download_path", ""), torrent.get("qb_name", ""))
+                if os.path.abspath(torrent_folder) == os.path.abspath(anime_main_folder):
                     associated_torrent = torrent
                     break
-
+            # Fallback: try matching by download_path only if qb_name is missing
+            if not associated_torrent:
+                for torrent in tracked_torrents:
+                    if os.path.abspath(torrent.get("download_path", "")) == os.path.abspath(anime_main_folder):
+                        associated_torrent = torrent
+                        break
             if associated_torrent and associated_torrent.get("infohash") != "N/A":
                 remove_options = [
                     "❌ No, keep torrent in qBittorrent",
@@ -546,24 +556,35 @@ class AnimeManager:
                         clear_screen()
                         print(f"❌ Could not connect to qBittorrent.")
                     wait_for_enter()
-                    return  # Do not prompt for original folder deletion if torrent was handled
-
-            # Fallback: Ask about original folder
-            if target_path not in ["BROKEN LINK", "ACCESS DENIED", "DIRECTORY"] and os.path.exists(target_path):
+                    # After removing from qBittorrent, ask about folder deletion
+                    if os.path.exists(anime_main_folder):
+                        delete_options = ["❌ No, keep original folder", "🗑️  Yes, delete original folder"]
+                        delete_choice = self.menu_system.navigate_menu(delete_options, f"🗑️  Also delete '{anime_main_folder}'?")
+                        if delete_choice == 1:
+                            try:
+                                shutil.rmtree(anime_main_folder)
+                                clear_screen()
+                                print(f"🗑️  Deleted original folder '{anime_main_folder}'.")
+                            except Exception as e:
+                                clear_screen()
+                                print(f"❌ Error deleting original folder: {e}")
+                        else:
+                            cleanup_jellyfin_files(anime_main_folder)
+                    return
+            # Fallback: Ask about original folder if no torrent found
+            if os.path.exists(anime_main_folder):
                 delete_options = ["❌ No, keep original folder", "🗑️  Yes, delete original folder"]
-                delete_choice = self.menu_system.navigate_menu(delete_options, f"🗑️  Also delete '{target_path}'?")
+                delete_choice = self.menu_system.navigate_menu(delete_options, f"🗑️  Also delete '{anime_main_folder}'?")
                 if delete_choice == 1:
                     try:
-                        shutil.rmtree(target_path)
+                        shutil.rmtree(anime_main_folder)
                         clear_screen()
-                        print(f"🗑️  Deleted original folder '{target_path}'.")
+                        print(f"🗑️  Deleted original folder '{anime_main_folder}'.")
                     except Exception as e:
                         clear_screen()
                         print(f"❌ Error deleting original folder: {e}")
-                else:
-                    # Clean up Jellyfin files
-                    cleanup_jellyfin_files(target_path)
-
+            wait_for_enter()
+            return
         wait_for_enter()
     
     def _remove_anime_with_season_selection(self, anime_name: str, seasons: list) -> None:
