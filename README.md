@@ -77,8 +77,8 @@ This project follows a modular architecture with clear separation of concerns:
 1. **Clone or download the project**
 
    ```bash
-   git clone <repository-url>
-   cd jellyfin-library-manager
+   git clone https://github.com/InkAurora/JellyfinLibraryManager.git
+   cd JellyfinLibraryManager
    ```
 
 2. **Install dependencies**
