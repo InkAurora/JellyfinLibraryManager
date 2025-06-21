@@ -1,165 +1,333 @@
-# Jellyfin Library Manager - Modular Structure
+# 🎬 Jellyfin Library Manager
 
-## Overview
+A comprehensive media library management tool that automates the organization of movies and anime for Jellyfin media servers. This application provides seamless integration with qBittorrent for torrent management, AniList for anime metadata, and Nyaa.si for anime torrent discovery.
 
-This is a modularized version of the Jellyfin Library Manager script. The original monolithic script has been broken down into focused, maintainable modules with clear separation of concerns.
+## ✨ Features
 
-## Module Structure
+### 📚 Media Library Management
 
-### Core Modules
+- **Movie Library**: Organize and manage movie collections with symlink support
+- **Anime Library**: Comprehensive anime management with season and episode tracking
+- **Automatic File Organization**: Smart file detection and categorization
+- **Symlink Management**: Create and manage symbolic links for efficient storage
 
-- **`config.py`** - Configuration settings and constants
-- **`utils.py`** - Utility functions for formatting, validation, and common operations
-- **`main.py`** - Main application entry point and coordinator
+### 🔄 Torrent Integration
 
-### API Integration Modules
+- **qBittorrent Integration**: Direct API integration for torrent management
+- **Automatic Torrent Tracking**: Monitor download progress and completion status
+- **Background Monitoring**: Continuous tracking of active torrents
+- **Nyaa.si Search**: Built-in anime torrent search functionality
 
-- **`qbittorrent_api.py`** - qBittorrent Web API integration
-- **`anilist_api.py`** - AniList API integration for anime search
-- **`nyaa_api.py`** - Nyaa.si RSS feed integration for torrent search
+### 📊 Metadata & Search
 
-### Data Management Modules
+- **AniList Integration**: Rich anime metadata and search capabilities
+- **Interactive Search**: User-friendly search interface for anime discovery
+- **Real-time Updates**: Live torrent status and progress monitoring
 
-- **`database.py`** - Torrent tracking database and notifications management
-- **`file_utils.py`** - File system operations and symlink management
+### 🎨 User Experience
 
-### Feature Modules
+- **Intuitive Console UI**: Clean, colorful terminal interface
+- **Navigation-friendly**: Arrow key navigation with keyboard shortcuts
+- **Real-time Feedback**: Live updates and status indicators
+- **Cross-platform**: Works on Windows, macOS, and Linux
 
-- **`movie_manager.py`** - Movie library management
+## 🏗️ Architecture
+
+This project follows a modular architecture with clear separation of concerns:
+
+### Core Components
+
+- **`main.py`** - Application entry point and main coordinator
+- **`config.py`** - Centralized configuration management
+- **`ui.py`** - Terminal-based user interface system
+- **`utils.py`** - Common utilities and helper functions
+
+### API Integrations
+
+- **`qbittorrent_api.py`** - qBittorrent Web API client
+- **`anilist_api.py`** - AniList GraphQL API integration
+- **`nyaa_api.py`** - Nyaa.si RSS feed parser
+
+### Media Management
+
+- **`movie_manager.py`** - Movie library operations
 - **`anime_manager.py`** - Anime library management
-- **`torrent_manager.py`** - Torrent tracking and auto-completion
-- **`torrent_display.py`** - Torrent status display and monitoring
+- **`file_utils.py`** - File system operations and symlink handling
 
-### System Modules
+### Torrent Management
 
-- **`ui.py`** - User interface and menu system
-- **`background_monitor.py`** - Background monitoring for torrent completion
+- **`torrent_manager.py`** - Torrent tracking and management
+- **`torrent_display.py`** - Torrent status visualization
+- **`background_monitor.py`** - Background torrent monitoring
 
-## Key Improvements
+### Data Persistence
 
-### 1. **Separation of Concerns**
+- **`database.py`** - SQLite database for torrent tracking and notifications
 
-Each module has a single, well-defined responsibility:
+## 🚀 Quick Start
 
-- UI logic is separated from business logic
-- API integrations are isolated in their own modules
-- Database operations are centralized
-- File operations are unified
+### Prerequisites
 
-### 2. **Maintainability**
+- Python 3.7 or higher
+- qBittorrent with Web UI enabled
+- Internet connection for API access
 
-- Smaller, focused files are easier to understand and modify
-- Changes to one feature don't affect others
-- Clear dependencies between modules
+### Installation
 
-### 3. **Testability**
+1. **Clone or download the project**
 
-- Each module can be tested independently
-- Mock objects can easily replace dependencies
-- Business logic is separated from UI concerns
+   ```bash
+   git clone <repository-url>
+   cd jellyfin-library-manager
+   ```
 
-### 4. **Reusability**
+2. **Install dependencies**
 
-- Modules can be reused in other projects
-- API clients can be used standalone
-- Common utilities are centralized
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-### 5. **Configuration Management**
+3. **Configure the application**
 
-- All settings are centralized in `config.py`
-- Easy to modify paths, colors, and other settings
-- Environment-specific configurations can be easily managed
+   Edit `config.py` to match your setup:
 
-## Usage
+   ```python
+   # qBittorrent settings
+   QBITTORRENT_HOST = "localhost:8080"  # Your qBittorrent Web UI address
+   QBITTORRENT_USERNAME = "admin"
+   QBITTORRENT_PASSWORD = "your_password"
 
-### Running the Application
+   # Media folder paths
+   MEDIA_FOLDERS = [r"C:\Media", r"D:\Media"]  # Your movie directories
+   ANIME_FOLDER = r"D:\Anime"                  # Your anime directory
+   ```
 
-```bash
-python main.py
+4. **Run the application**
+   ```bash
+   python main.py
+   ```
+
+## 📖 Usage Guide
+
+### Main Menu Options
+
+1. **📚 List movies in library** - View all movies in your media folders
+2. **➕ Add new movie to library** - Add movies with symlink creation
+3. **🗑️ Remove movie from library** - Remove movies and clean up symlinks
+4. **📺 List anime in library** - Browse your anime collection
+5. **➕ Add new anime to library** - Add anime with AniList integration
+6. **🗑️ Remove anime from library** - Remove anime and associated files
+7. **📋 View tracked torrents** - Monitor active torrent downloads
+8. **🚪 Exit** - Close the application
+
+### Navigation
+
+- **Arrow Keys**: Navigate through menus
+- **Enter**: Select an option
+- **Escape**: Go back or exit
+- **Page Up/Down**: Navigate long lists
+
+### Key Features in Action
+
+#### Adding Anime
+
+1. Search for anime using AniList integration
+2. Select from search results with rich metadata
+3. Choose torrent from Nyaa.si feeds
+4. Automatic tracking and organization upon completion
+
+#### Torrent Monitoring
+
+- Real-time progress tracking
+- Automatic completion detection
+- Background monitoring system
+- Notification system for completed downloads
+
+## ⚙️ Configuration
+
+### qBittorrent Setup
+
+1. Enable Web UI in qBittorrent settings
+2. Set username and password
+3. Note the port (default: 8080)
+4. Update `config.py` with your credentials
+
+### Media Folder Structure
+
+```
+Media/
+├── Movies/
+│   ├── Movie Title (Year)/
+│   │   └── movie_file.mkv
+│   └── ...
+└── Anime/
+    ├── Anime Title/
+    │   ├── Season 1/
+    │   │   ├── episode_01.mkv
+    │   │   └── ...
+    │   └── Season 2/
+    └── ...
 ```
 
-### Installing Dependencies
+### Color Customization
+
+Modify the `Colors` class in `config.py` to customize the terminal appearance:
+
+```python
+class Colors:
+    CYAN = '\033[96m'      # Movie titles
+    YELLOW = '\033[93m'    # Paths and seasons
+    GREEN = '\033[92m'     # Success messages
+    RED = '\033[91m'       # Errors
+    MAGENTA = '\033[95m'   # Anime titles
+    RESET = '\033[0m'      # Reset
+```
+
+## 🔧 Dependencies
+
+This project uses the following Python packages:
+
+- **`requests`** (≥2.28.0) - HTTP requests for API communication
+- **`feedparser`** (≥6.0.10) - RSS feed parsing for Nyaa.si integration
+- **`beautifulsoup4`** (≥4.11.0) - HTML parsing and web scraping
+
+Install all dependencies with:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### Configuration
+## 🏆 Key Advantages
 
-Edit `config.py` to customize:
+### Modular Design
 
-- qBittorrent connection settings
-- Media folder paths
-- Color schemes
-- Monitoring intervals
+- **Single Responsibility**: Each module has a focused purpose
+- **Maintainable**: Easy to understand, modify, and extend
+- **Testable**: Independent modules can be tested in isolation
+- **Reusable**: Components can be used in other projects
 
-## Module Dependencies
+### User Experience
+
+- **Intuitive Interface**: Clean terminal UI with visual feedback
+- **Keyboard Navigation**: Efficient navigation without mouse dependency
+- **Real-time Updates**: Live monitoring of torrents and downloads
+- **Error Handling**: Graceful error recovery and user feedback
+
+### Integration Capabilities
+
+- **API-First**: Native integration with popular services
+- **Extensible**: Easy to add new APIs and features
+- **Cross-platform**: Works on Windows, macOS, and Linux
+- **Automation**: Background processes for hands-off operation
+
+## 🛠️ Development
+
+### Project Structure
 
 ```
-main.py
-├── ui.py
-├── movie_manager.py
-│   ├── file_utils.py
-│   ├── ui.py
-│   └── utils.py
-├── anime_manager.py
-│   ├── file_utils.py
-│   ├── ui.py
-│   ├── anilist_api.py
-│   ├── nyaa_api.py
-│   ├── qbittorrent_api.py
-│   └── database.py
-├── torrent_display.py
-│   ├── torrent_manager.py
-│   ├── database.py
-│   └── ui.py
-├── background_monitor.py
-│   ├── torrent_manager.py
-│   └── database.py
-└── config.py
+jellyfin-library-manager/
+├── main.py                 # Application entry point
+├── config.py              # Configuration settings
+├── requirements.txt       # Python dependencies
+├── README.md             # This file
+├──
+├── Core Modules/
+│   ├── ui.py             # User interface system
+│   ├── utils.py          # Common utilities
+│   └── database.py       # Data persistence
+├──
+├── API Integrations/
+│   ├── qbittorrent_api.py # qBittorrent client
+│   ├── anilist_api.py     # AniList integration
+│   └── nyaa_api.py        # Nyaa.si torrent search
+├──
+├── Media Management/
+│   ├── movie_manager.py   # Movie operations
+│   ├── anime_manager.py   # Anime operations
+│   └── file_utils.py      # File system utilities
+└──
+└── Torrent Management/
+    ├── torrent_manager.py    # Torrent tracking
+    ├── torrent_display.py    # Status visualization
+    └── background_monitor.py # Background monitoring
 ```
-
-## Backward Compatibility
-
-The modularized version maintains full backward compatibility by providing legacy function wrappers in each module. This means:
-
-- Existing imports will continue to work
-- Function signatures remain the same
-- Behavior is preserved
-
-## Future Enhancements
-
-The modular structure makes it easy to add new features:
-
-1. **New Media Types**: Add modules for books, music, etc.
-2. **Additional APIs**: Add support for other anime/movie databases
-3. **Plugin System**: Create a plugin architecture for custom extensions
-4. **Web Interface**: Add a web-based UI module
-5. **Database Backends**: Support for different database systems
-6. **Cloud Integration**: Add cloud storage support
-
-## Development Guidelines
 
 ### Adding New Features
 
-1. Create a new module or extend an existing one
-2. Follow the existing naming conventions
-3. Add configuration options to `config.py`
-4. Update this README with new dependencies
+1. **Create a new module** or extend existing functionality
+2. **Follow naming conventions** and maintain consistency
+3. **Add configuration options** to `config.py` if needed
+4. **Update imports** in relevant modules
+5. **Test thoroughly** before committing changes
 
-### Testing
+### Code Style Guidelines
 
-1. Test each module independently
-2. Verify backward compatibility
-3. Test integration points between modules
-
-### Code Style
-
+- Follow PEP 8 Python style guidelines
 - Use type hints for better code documentation
-- Follow PEP 8 style guidelines
-- Add docstrings to all public functions and classes
+- Add comprehensive docstrings to functions and classes
 - Use meaningful variable and function names
+- Keep functions focused and modular
 
-## Legacy Script
+## 🤝 Contributing
 
-The original `manager_jellyfin.py` script is preserved for reference. The modular version provides the same functionality with improved organization and maintainability.
+Contributions are welcome! Please follow these guidelines:
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes with proper documentation
+4. Test your changes thoroughly
+5. Submit a pull request with a clear description
+
+## 📄 License
+
+This project is open source. Please refer to the license file for details.
+
+## 🆘 Support & Troubleshooting
+
+### Common Issues
+
+**Connection Problems**
+
+- Verify qBittorrent Web UI is enabled and accessible
+- Check firewall settings and port availability
+- Ensure correct credentials in `config.py`
+
+**File Path Issues**
+
+- Use absolute paths in configuration
+- Ensure media folders exist and are accessible
+- Check file permissions for symlink creation
+
+**API Rate Limits**
+
+- AniList and Nyaa.si may have rate limits
+- The application includes reasonable delays between requests
+- Avoid excessive rapid searches
+
+### Getting Help
+
+If you encounter issues:
+
+1. Check the configuration settings
+2. Verify all dependencies are installed
+3. Review the console output for error messages
+4. Check file and folder permissions
+
+## 🔮 Future Enhancements
+
+### Planned Features
+
+- **Web Interface**: Browser-based management interface
+- **Mobile Support**: Responsive design for mobile devices
+- **Plugin System**: Extensible architecture for custom plugins
+- **Additional APIs**: Support for more anime and movie databases
+- **Cloud Integration**: Support for cloud storage providers
+- **Advanced Filtering**: Enhanced search and filtering capabilities
+
+### Potential Integrations
+
+- **Plex Support**: Alternative to Jellyfin integration
+- **Sonarr/Radarr**: Integration with popular \*arr applications
+- **Discord Notifications**: Real-time notifications via Discord
+- **Telegram Bot**: Mobile notifications and control
+- **Trakt Integration**: Watch history and recommendations
