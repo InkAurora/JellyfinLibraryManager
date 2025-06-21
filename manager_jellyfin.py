@@ -1424,6 +1424,117 @@ def remove_anime():
             
             wait_for_enter()
 
+# Background monitoring thread
+class TorrentBackgroundMonitor:
+    """Background thread for monitoring torrents and auto-adding completed ones to library."""
+    
+    def __init__(self):
+        self.running = False
+        self.thread = None
+        self.check_interval = 30  # Check every 30 seconds (less frequent than UI refresh)
+        
+    def start_monitoring(self):
+        """Start the background monitoring thread."""
+        if not self.running:
+            self.running = True
+            self.thread = threading.Thread(target=self._monitor_loop, daemon=True)
+            self.thread.start()
+            print("🔄 Background torrent monitoring started")
+    
+    def stop_monitoring(self):
+        """Stop the background monitoring thread."""
+        if self.running:
+            self.running = False
+            if self.thread:
+                self.thread.join(timeout=2)
+            print("⏹️  Background torrent monitoring stopped")
+    
+    def _monitor_loop(self):
+        """Main monitoring loop that runs in the background."""
+        while self.running:
+            try:
+                # Check for completed torrents and auto-add to library
+                newly_completed = auto_add_completed_torrents()
+                
+                # If any torrents were completed, we could save a notification
+                # (but we won't print here to avoid disrupting the current screen)
+                if newly_completed:
+                    # Save notification to a file or database for later display
+                    self._save_completion_notification(newly_completed)
+                    
+            except Exception as e:
+                # Log errors silently to avoid disrupting the UI
+                pass
+            
+            # Wait for the next check (with small intervals to allow clean shutdown)
+            for _ in range(self.check_interval * 10):  # Check every 0.1s for shutdown
+                if not self.running:
+                    break
+                time.sleep(0.1)
+    
+    def _save_completion_notification(self, completed_torrents):
+        """Save notification about completed torrents for later display."""
+        try:
+            # Create a simple notification log
+            notifications_file = os.path.join(get_anime_folder(), "torrent_notifications.json")
+            
+            notifications = []
+            if os.path.exists(notifications_file):
+                try:
+                    with open(notifications_file, 'r', encoding='utf-8') as f:
+                        notifications = json.load(f)
+                except:
+                    notifications = []
+            
+            # Add new notifications
+            for torrent in completed_torrents:
+                anilist_info = torrent.get('anilist_info', {})
+                anime_title = anilist_info.get('title', 'Unknown Anime')
+                
+                notification = {
+                    'timestamp': time.time(),
+                    'anime_title': anime_title,
+                    'torrent_title': torrent.get('title', 'Unknown'),
+                    'torrent_id': torrent.get('id'),
+                    'message': f"'{anime_title}' has been automatically added to your anime library!"
+                }
+                notifications.append(notification)
+            
+            # Keep only recent notifications (last 24 hours)
+            current_time = time.time()
+            notifications = [n for n in notifications if current_time - n['timestamp'] < 86400]
+            
+            # Save notifications
+            os.makedirs(os.path.dirname(notifications_file), exist_ok=True)
+            with open(notifications_file, 'w', encoding='utf-8') as f:
+                json.dump(notifications, f, indent=2)
+                
+        except Exception as e:
+            pass  # Silently handle errors
+
+def get_pending_notifications():
+    """Get and clear pending completion notifications."""
+    try:
+        notifications_file = os.path.join(get_anime_folder(), "torrent_notifications.json")
+        
+        if not os.path.exists(notifications_file):
+            return []
+        
+        with open(notifications_file, 'r', encoding='utf-8') as f:
+            notifications = json.load(f)
+        
+        # Clear the notifications file after reading
+        with open(notifications_file, 'w', encoding='utf-8') as f:
+            json.dump([], f)
+        
+        return notifications
+        
+    except Exception as e:
+        return []
+
+# Global background monitor instance
+background_monitor = TorrentBackgroundMonitor()
+
 def anilist_search(query: str, limit: int = 10):
     """Search AniList API for anime by name. Returns a list of (title, year, id)."""
     url = "https://graphql.anilist.co"
@@ -1814,7 +1925,22 @@ def show_torrent_file_tree(torrent_page_url, rss_info=None):
 def display_tracked_torrents():
     """Display all torrents tracked by the script with real-time qBittorrent status."""
     clear_screen()
+    
+    # Check for pending notifications from background monitoring
+    notifications = get_pending_notifications()
+    if notifications:
+        print("🎉 NEW ANIME ADDED TO LIBRARY!")
+        print("=" * 40)
+        for notification in notifications:
+            print(f"📚 {notification['message']}")
+        print("=" * 40)
+        print()
+        wait_for_enter()
+        clear_screen()
+    
     print("🔄 Syncing with qBittorrent...")
+    print("🤖 Background monitoring is active - completed torrents auto-added to library")
+    print()
     
     # Sync with qBittorrent to get current status
     synced_torrents, error = sync_torrents_with_qbittorrent()
@@ -2004,6 +2130,9 @@ def main():
     print("🎬 Welcome to Jellyfin Library Manager!")
     print("💡 Use arrow keys to navigate, Enter to select, Esc to exit")
     
+    # Start background torrent monitoring
+    background_monitor.start_monitoring()
+    
     # Use wait_for_enter for initial prompt
     wait_for_enter()
     
@@ -2016,14 +2145,13 @@ def main():
         "6. 🗑️  Remove anime from library",
         "7. 📋 View tracked torrents",
         "8. 🔍 Search anime on AniList",
-        "9. 🚪 Exit"
-    ]
+        "9. 🚪 Exit"    ]
     
     while True:
         try:
             choice = navigate_menu(main_options)
             
-            if choice == -1 or choice == 8:  # Exit
+            if choice == -1 or choice == 8:  # Exit                background_monitor.stop_monitoring()
                 clear_screen()
                 print("👋 Goodbye!")
                 break
@@ -2045,6 +2173,7 @@ def main():
                 interactive_anilist_search()
                 
         except KeyboardInterrupt:
+            background_monitor.stop_monitoring()
             clear_screen()
             print("\n\n👋 Goodbye!")
             break
@@ -2273,6 +2402,19 @@ def display_torrents_status():
     print("=" * 80)
     print(f"📊 Summary: {total_downloading} downloading, {total_completed} completed, {total_seeding} seeding, {total_library_added} in library")
     print("💡 This view shows only torrents added via this script")
+    print("🔄 Press any key to refresh, Esc to return to main menu")
+    
+    # Wait for user input with refresh option
+    while True:
+        if msvcrt.kbhit():
+            key = msvcrt.getch()
+            if key == b'\x1b':  # Esc
+                return
+            else:
+                # Any other key refreshes the display
+                display_tracked_torrents()
+                return
+        time.sleep(0.1)
 
 if __name__ == "__main__":
     main()
