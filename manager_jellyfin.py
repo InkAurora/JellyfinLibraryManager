@@ -139,6 +139,94 @@ def update_torrent_status(torrent_id, status):
     
     return save_torrent_database(db_data)
 
+def sync_torrents_with_qbittorrent():
+    """Sync tracked torrents with current qBittorrent status."""
+    # Check if qBittorrent is accessible
+    if not qb_check_connection():
+        return None, "qBittorrent not accessible"
+    
+    # Login to qBittorrent
+    session = qb_login()
+    if not session:
+        return None, "Failed to authenticate with qBittorrent"
+    
+    # Get all torrents from qBittorrent
+    qb_torrents = qb_get_torrent_info(session)
+    if not qb_torrents:
+        return [], "No torrents found in qBittorrent"
+    
+    # Get tracked torrents from database
+    tracked_torrents = get_tracked_torrents()
+    
+    # Match tracked torrents with qBittorrent torrents by hash
+    synced_torrents = []
+    for tracked in tracked_torrents:
+        # Find matching torrent in qBittorrent by infohash
+        qb_match = None
+        for qb_torrent in qb_torrents:
+            if qb_torrent.get('hash', '').lower() == tracked.get('infohash', '').lower():
+                qb_match = qb_torrent
+                break
+        
+        # Combine tracked info with qBittorrent status
+        synced_torrent = tracked.copy()
+        if qb_match:
+            synced_torrent.update({
+                'qb_status': qb_match.get('state', 'unknown'),
+                'qb_progress': qb_match.get('progress', 0) * 100,
+                'qb_downloaded': qb_match.get('downloaded', 0),
+                'qb_size': qb_match.get('size', 0),
+                'qb_speed_dl': qb_match.get('dlspeed', 0),
+                'qb_speed_up': qb_match.get('upspeed', 0),
+                'qb_eta': qb_match.get('eta', 0),
+                'qb_ratio': qb_match.get('ratio', 0),
+                'qb_name': qb_match.get('name', 'Unknown'),
+                'qb_save_path': qb_match.get('save_path', 'Unknown'),
+                'found_in_qb': True
+            })
+        else:
+            synced_torrent.update({
+                'found_in_qb': False,
+                'qb_status': 'not_found'
+            })
+        
+        synced_torrents.append(synced_torrent)
+    
+    return synced_torrents, None
+
+def format_bytes(bytes_val):
+    """Convert bytes to human readable format."""
+    if bytes_val == 0:
+        return "0 B"
+    
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if bytes_val < 1024.0:
+            return f"{bytes_val:.1f} {unit}"
+        bytes_val /= 1024.0
+    return f"{bytes_val:.1f} PB"
+
+def format_speed(bytes_per_sec):
+    """Convert bytes per second to human readable format."""
+    return f"{format_bytes(bytes_per_sec)}/s"
+
+def format_eta(seconds):
+    """Convert seconds to human readable ETA."""
+    if seconds <= 0 or seconds == 8640000:  # 8640000 is qBittorrent's "infinity"
+        return "∞"
+    
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    elif seconds < 3600:
+        return f"{int(seconds/60)}m {int(seconds%60)}s"
+    elif seconds < 86400:
+        hours = int(seconds / 3600)
+        minutes = int((seconds % 3600) / 60)
+        return f"{hours}h {minutes}m"
+    else:
+        days = int(seconds / 86400)
+        hours = int((seconds % 86400) / 3600)
+        return f"{days}d {hours}h"
+
 # ANSI color codes
 CYAN = '\033[96m'      # Bright cyan for movie titles
 YELLOW = '\033[93m'    # Yellow for symlink paths and season names
@@ -1039,7 +1127,6 @@ def add_anime():
                     else:
                         print("📁 Using default download location")
                     print()
-                    
                     success = qb_add_torrent(session, selected_torrent['link'], download_path)
                     
                     if success:
@@ -1048,7 +1135,6 @@ def add_anime():
                         torrent_db_info["download_path"] = download_path or "Default"
                         
                         torrent_id = add_torrent_to_database(torrent_db_info)
-                        
                         clear_screen()
                         print("✅ Torrent added successfully!")
                         print(f"🎬 Title: {selected_torrent['title']}")
@@ -1058,12 +1144,13 @@ def add_anime():
                         
                         if torrent_id:
                             print(f"🗃️  Database ID: #{torrent_id}")
-                            print("💾 Torrent added to tracking database")
+                            print("� Torrent added to tracking database")
+                            print("💡 You can monitor download progress in 'View tracked torrents'")
                         else:
                             print("⚠️  Warning: Could not save to tracking database")
                         
                         print()
-                        print("💡 You can monitor the download progress in qBittorrent.")
+                        print("� Torrent is now downloading in qBittorrent")
                         
                         # Show recent torrents
                         print("\n🔄 Recent torrents in qBittorrent:")
@@ -1725,36 +1812,129 @@ def show_torrent_file_tree(torrent_page_url, rss_info=None):
                 return True   # Download requested            time.sleep(0.05)
 
 def display_tracked_torrents():
-    """Display all torrents tracked by the script."""
-    tracked_torrents = get_tracked_torrents()
+    """Display all torrents tracked by the script with real-time qBittorrent status."""
+    clear_screen()
+    print("🔄 Syncing with qBittorrent...")
     
-    if not tracked_torrents:
+    # Sync with qBittorrent to get current status
+    synced_torrents, error = sync_torrents_with_qbittorrent()
+    
+    if error:
+        clear_screen()
+        print(f"\n❌ Error syncing with qBittorrent: {error}")
+        print("💡 Make sure qBittorrent is running and Web UI is accessible.")
+        wait_for_enter()
+        return
+    
+    if not synced_torrents:
         clear_screen()
         print("\n📋 No torrents tracked yet.")
         print("💡 Torrents will appear here after downloading via the script.")
         wait_for_enter()
         return
     
+    # Separate torrents by status
+    downloading = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['downloading', 'stalledDL', 'queuedDL', 'allocating']]
+    seeding = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['uploading', 'stalledUP', 'queuedUP']]
+    completed = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['completedDL']]
+    paused = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['pausedDL', 'pausedUP']]
+    error_torrents = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['error', 'missingFiles']]
+    not_found = [t for t in synced_torrents if not t.get('found_in_qb')]
+    
     clear_screen()
-    print(f"\n📋 Tracked Torrents ({len(tracked_torrents)} total):")
-    print("=" * 70)
+    print(f"\n📋 Tracked Torrents Progress ({len(synced_torrents)} total)")
+    print("=" * 80)
     
-    for i, torrent in enumerate(tracked_torrents, 1):
-        print(f"{i:3d}. {CYAN}{torrent['title'][:60]}{RESET}")
-        print(f"     📊 Size: {torrent['size']}")
-        print(f"     🌱 Seeds: {torrent['seeds']} | 📉 Leechers: {torrent['leechers']}")
-        print(f"     📁 Path: {torrent['download_path']}")
-        print(f"     📅 Added: {torrent['added_date'][:10]}")
-        
-        # Show AniList info if available
-        if torrent.get('anilist_info'):
-            anilist = torrent['anilist_info']
-            print(f"     🎬 AniList: {anilist.get('title', 'N/A')} ({anilist.get('year', 'N/A')})")
-        
-        print(f"     🗃️  ID: #{torrent['id']} | Status: {torrent.get('status', 'unknown')}")
-        print()
+    # Show downloading torrents first (most important)
+    if downloading:
+        print(f"\n📥 DOWNLOADING ({len(downloading)}):")
+        for torrent in downloading:
+            progress = torrent.get('qb_progress', 0)
+            speed_dl = torrent.get('qb_speed_dl', 0)
+            eta = torrent.get('qb_eta', 0)
+            
+            print(f"  {GREEN}▶{RESET} {torrent['title'][:55]}")
+            print(f"    Progress: {GREEN}{progress:.1f}%{RESET} | Speed: {format_speed(speed_dl)} | ETA: {format_eta(eta)}")
+            print(f"    Size: {format_bytes(torrent.get('qb_size', 0))} | Downloaded: {format_bytes(torrent.get('qb_downloaded', 0))}")
+            print(f"    🗃️  ID: #{torrent['id']} | Status: {torrent.get('qb_status', 'unknown')}")
+            print()
     
-    wait_for_enter()
+    # Show completed torrents
+    if completed:
+        print(f"\n✅ COMPLETED ({len(completed)}):")
+        for torrent in completed:
+            ratio = torrent.get('qb_ratio', 0)
+            speed_up = torrent.get('qb_speed_up', 0)
+            
+            print(f"  {GREEN}✓{RESET} {torrent['title'][:55]}")
+            print(f"    Size: {format_bytes(torrent.get('qb_size', 0))} | Ratio: {ratio:.2f}")
+            if speed_up > 0:
+                print(f"    Upload Speed: {format_speed(speed_up)}")
+            print(f"    �️  ID: #{torrent['id']} | Path: {torrent.get('qb_save_path', 'Unknown')}")
+            print()
+    
+    # Show seeding torrents
+    if seeding:
+        print(f"\n🌱 SEEDING ({len(seeding)}):")
+        for torrent in seeding:
+            ratio = torrent.get('qb_ratio', 0)
+            speed_up = torrent.get('qb_speed_up', 0)
+            
+            print(f"  {YELLOW}↗{RESET} {torrent['title'][:55]}")
+            print(f"    Ratio: {ratio:.2f} | Upload Speed: {format_speed(speed_up)}")
+            print(f"    🗃️  ID: #{torrent['id']}")
+            print()
+    
+    # Show paused torrents
+    if paused:
+        print(f"\n⏸️  PAUSED ({len(paused)}):")
+        for torrent in paused:
+            progress = torrent.get('qb_progress', 0)
+            
+            print(f"  {YELLOW}⏸{RESET} {torrent['title'][:55]}")
+            print(f"    Progress: {progress:.1f}% | Status: {torrent.get('qb_status', 'unknown')}")
+            print(f"    🗃️  ID: #{torrent['id']}")
+            print()
+    
+    # Show error torrents
+    if error_torrents:
+        print(f"\n❌ ERRORS ({len(error_torrents)}):")
+        for torrent in error_torrents:
+            print(f"  {RED}✗{RESET} {torrent['title'][:55]}")
+            print(f"    Status: {torrent.get('qb_status', 'unknown')}")
+            print(f"    🗃️  ID: #{torrent['id']}")
+            print()
+    
+    # Show not found torrents
+    if not_found:
+        print(f"\n🔍 NOT FOUND IN QBITTORRENT ({len(not_found)}):")
+        for torrent in not_found:
+            print(f"  {RED}?{RESET} {torrent['title'][:55]}")
+            print(f"    Added: {torrent['added_date'][:10]} | May have been removed from qBittorrent")
+            print(f"    🗃️  ID: #{torrent['id']}")
+            print()
+    
+    # Summary
+    total_downloading = len(downloading)
+    total_completed = len(completed)
+    total_seeding = len(seeding)
+    
+    print("=" * 80)
+    print(f"📊 Summary: {total_downloading} downloading, {total_completed} completed, {total_seeding} seeding")
+    print("💡 This view shows only torrents added via this script")
+    print("🔄 Press any key to refresh, Esc to return to main menu")
+    
+    # Wait for user input with refresh option
+    while True:
+        if msvcrt.kbhit():
+            key = msvcrt.getch()
+            if key == b'\x1b':  # Esc
+                return
+            else:
+                # Any other key refreshes the display
+                display_tracked_torrents()
+                return
+        time.sleep(0.1)
 
 def main():
     """Main program loop."""
