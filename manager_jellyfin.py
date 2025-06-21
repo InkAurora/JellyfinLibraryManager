@@ -1616,7 +1616,7 @@ def parse_size(size_str):
             'G': 1024 ** 3, 'GIB': 1024 ** 3, 'GB': 1024 ** 3,
             'M': 1024 ** 2, 'MIB': 1024 ** 2, 'MB': 1024 ** 2,
             'K': 1024, 'KIB': 1024, 'KB': 1024
-        }
+        };
         
         for prefix, multiplier in multipliers.items():
             if unit.startswith(prefix):
@@ -1840,6 +1840,7 @@ def display_tracked_torrents():
     paused = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['pausedDL', 'pausedUP']]
     error_torrents = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['error', 'missingFiles']]
     not_found = [t for t in synced_torrents if not t.get('found_in_qb')]
+    library_added = [t for t in synced_torrents if t.get('status') == 'added_to_library']
     
     clear_screen()
     print(f"\n📋 Tracked Torrents Progress ({len(synced_torrents)} total)")
@@ -1859,6 +1860,18 @@ def display_tracked_torrents():
             print(f"    🗃️  ID: #{torrent['id']} | Status: {torrent.get('qb_status', 'unknown')}")
             print()
     
+    # Show library-added torrents first (most important for completed ones)
+    if library_added:
+        print(f"\n🎬 ADDED TO LIBRARY ({len(library_added)}):")
+        for torrent in library_added:
+            anilist_info = torrent.get('anilist_info', {})
+            anime_title = anilist_info.get('title', 'Unknown')
+            
+            print(f"  {MAGENTA}📚{RESET} {anime_title}")
+            print(f"    Original: {torrent['title'][:45]}")
+            print(f"    🗃️  ID: #{torrent['id']} | Status: Added to anime library")
+            print()
+    
     # Show completed torrents
     if completed:
         print(f"\n✅ COMPLETED ({len(completed)}):")
@@ -1870,7 +1883,7 @@ def display_tracked_torrents():
             print(f"    Size: {format_bytes(torrent.get('qb_size', 0))} | Ratio: {ratio:.2f}")
             if speed_up > 0:
                 print(f"    Upload Speed: {format_speed(speed_up)}")
-            print(f"    �️  ID: #{torrent['id']} | Path: {torrent.get('qb_save_path', 'Unknown')}")
+            print(f"    🗃️  ID: #{torrent['id']} | Path: {torrent.get('qb_save_path', 'Unknown')}")
             print()
     
     # Show seeding torrents
@@ -1918,9 +1931,10 @@ def display_tracked_torrents():
     total_downloading = len(downloading)
     total_completed = len(completed)
     total_seeding = len(seeding)
+    total_library_added = len(library_added)
     
     print("=" * 80)
-    print(f"📊 Summary: {total_downloading} downloading, {total_completed} completed, {total_seeding} seeding")
+    print(f"📊 Summary: {total_downloading} downloading, {total_completed} completed, {total_seeding} seeding, {total_library_added} in library")
     print("💡 This view shows only torrents added via this script")
     print("🔄 Press any key to refresh, Esc to return to main menu")
     
@@ -1936,13 +1950,62 @@ def display_tracked_torrents():
                 return
         time.sleep(0.1)
 
+def display_tracked_torrents_with_auto_refresh():
+    """Display tracked torrents with auto-refresh every 5 seconds and auto-add completed torrents."""
+    last_refresh = 0
+    refresh_interval = 5  # seconds
+    
+    while True:
+        current_time = time.time()
+        
+        # Check for auto-refresh or force refresh
+        should_refresh = (current_time - last_refresh) >= refresh_interval
+        
+        if should_refresh:
+            # Check for completed torrents and auto-add to library
+            try:
+                newly_completed = auto_add_completed_torrents()
+                if newly_completed:
+                    # Show notification for newly added anime
+                    clear_screen()
+                    print("🎉 NEW ANIME ADDED TO LIBRARY!")
+                    print("=" * 40)
+                    
+                    for torrent in newly_completed:
+                        anilist_info = torrent.get('anilist_info', {})
+                        anime_title = anilist_info.get('title', 'Unknown Anime')
+                        print(f"📚 '{anime_title}' has been automatically added!")
+                    
+                    print("\nContinuing with auto-refresh...")
+                    time.sleep(3)  # Show message briefly
+            except Exception as e:
+                pass  # Silently handle errors to avoid disrupting the display
+            
+            # Display current status
+            display_torrents_status()
+            last_refresh = current_time
+        
+        # Check for user input (non-blocking)
+        if msvcrt.kbhit():
+            key = msvcrt.getch()
+            if key == b'\x1b':  # Esc key
+                return
+            elif key == b'r' or key == b'R':  # Manual refresh
+                last_refresh = 0  # Force refresh on next iteration
+            elif key == b'q' or key == b'Q':  # Quit
+                return
+        
+        # Small delay to prevent excessive CPU usage
+        time.sleep(0.1)
+
 def main():
     """Main program loop."""
     clear_screen()
     print("🎬 Welcome to Jellyfin Library Manager!")
     print("💡 Use arrow keys to navigate, Enter to select, Esc to exit")
     
-    # Use wait_for_enter for initial prompt    wait_for_enter()
+    # Use wait_for_enter for initial prompt
+    wait_for_enter()
     
     main_options = [
         "1. 📚 List movies in library",
@@ -1977,7 +2040,7 @@ def main():
             elif choice == 5:  # Remove anime
                 remove_anime()
             elif choice == 6:  # View tracked torrents
-                display_tracked_torrents()
+                display_tracked_torrents_with_auto_refresh()
             elif choice == 7:  # Search anime
                 interactive_anilist_search()
                 
@@ -1989,6 +2052,227 @@ def main():
             clear_screen()
             print(f"❌ An error occurred: {e}")
             wait_for_enter()
+
+def add_completed_torrent_to_library(torrent, download_path):
+    """Add a completed torrent to the anime library using AniList info."""
+    try:
+        anilist_info = torrent.get('anilist_info', {})
+        anime_title = anilist_info.get('title', 'Unknown Anime')
+        
+        # Check if download path contains episode files
+        if not os.path.exists(download_path):
+            return False
+        
+        # Find episode files in the download path
+        episode_files = []
+        
+        # Check if it's a single file or directory
+        if os.path.isfile(download_path):
+            if is_episode_file(download_path):
+                episode_files = [download_path]
+                download_path = os.path.dirname(download_path)
+        else:
+            # Check for episode files in the directory
+            for root, dirs, files in os.walk(download_path):
+                for file in files:
+                    if is_episode_file(file):
+                        episode_files.append(os.path.join(root, file))
+        
+        if not episode_files:
+            return False
+        
+        # Create anime library structure
+        anime_base_folder = get_anime_folder()
+        anime_main_folder = os.path.join(anime_base_folder, anime_title)
+        season_folder = os.path.join(anime_main_folder, "Season 01")
+        
+        # Create directories
+        os.makedirs(season_folder, exist_ok=True)
+        
+        # Create symlinks for episode files
+        linked_count = 0
+        for episode_file in episode_files:
+            episode_name = os.path.basename(episode_file)
+            target_file = os.path.join(season_folder, episode_name)
+            
+            # Skip if symlink already exists
+            if os.path.exists(target_file):
+                continue
+            
+            try:
+                os.symlink(episode_file, target_file)
+                linked_count += 1
+            except Exception as e:
+                print(f"⚠️  Warning: Could not create symlink for '{episode_name}': {e}")
+        
+        return linked_count > 0
+    
+    except Exception as e:
+        print(f"❌ Error adding torrent to library: {e}")
+        return False
+
+def auto_add_completed_torrents():
+    """Check for completed torrents and automatically add them to the anime library."""
+    # Get tracked torrents with qBittorrent sync
+    synced_torrents, error = sync_torrents_with_qbittorrent()
+    
+    if error or not synced_torrents:
+        return []
+    
+    # Find newly completed torrents
+    completed_torrents = []
+    
+    for torrent in synced_torrents:
+        # Check if torrent is completed and not already processed
+        if (torrent.get('found_in_qb') and 
+            torrent.get('qb_status') == 'completedDL' and 
+            torrent.get('status') != 'added_to_library'):
+            
+            # Get AniList info for proper naming
+            anilist_info = torrent.get('anilist_info', {})
+            if not anilist_info.get('title'):
+                continue
+            
+            # Get the download path from qBittorrent
+            download_path = torrent.get('qb_save_path', '')
+            if not download_path or not os.path.exists(download_path):
+                continue
+            
+            # Try to add to library
+            success = add_completed_torrent_to_library(torrent, download_path)
+            
+            if success:
+                completed_torrents.append(torrent)
+                # Update torrent status in database
+                update_torrent_status(torrent['id'], 'added_to_library')
+    
+    return completed_torrents
+
+def display_torrents_status():
+    """Display the current status of tracked torrents (called by auto-refresh)."""
+    clear_screen()
+    
+    # Get current time for display
+    current_time = time.strftime("%H:%M:%S")
+    print(f"🔄 Auto-refreshing every 5s | Last update: {current_time}")
+    print("💡 Press 'R' to refresh now, 'Esc' to exit")
+    print("🎯 Completed torrents are automatically added to anime library")
+    
+    # Sync with qBittorrent to get current status
+    synced_torrents, error = sync_torrents_with_qbittorrent()
+    
+    if error:
+        print(f"\n❌ Error syncing with qBittorrent: {error}")
+        print("💡 Make sure qBittorrent is running and Web UI is accessible.")
+        return
+    
+    if not synced_torrents:
+        print("\n📋 No torrents tracked yet.")
+        print("💡 Torrents will appear here after downloading via the script.")
+        return
+    
+    # Separate torrents by status
+    downloading = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['downloading', 'stalledDL', 'queuedDL', 'allocating']]
+    seeding = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['uploading', 'stalledUP', 'queuedUP']]
+    completed = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['completedDL']]
+    paused = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['pausedDL', 'pausedUP']]
+    error_torrents = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['error', 'missingFiles']]
+    not_found = [t for t in synced_torrents if not t.get('found_in_qb')]
+    library_added = [t for t in synced_torrents if t.get('status') == 'added_to_library']
+    
+    print(f"\n📋 Tracked Torrents Progress ({len(synced_torrents)} total)")
+    print("=" * 80)
+    
+    # Show downloading torrents first (most important)
+    if downloading:
+        print(f"\n📥 DOWNLOADING ({len(downloading)}):")
+        for torrent in downloading:
+            progress = torrent.get('qb_progress', 0)
+            speed_dl = torrent.get('qb_speed_dl', 0)
+            eta = torrent.get('qb_eta', 0)
+            
+            print(f"  {GREEN}▶{RESET} {torrent['title'][:55]}")
+            print(f"    Progress: {GREEN}{progress:.1f}%{RESET} | Speed: {format_speed(speed_dl)} | ETA: {format_eta(eta)}")
+            print(f"    Size: {format_bytes(torrent.get('qb_size', 0))} | Downloaded: {format_bytes(torrent.get('qb_downloaded', 0))}")
+            print(f"    🗃️  ID: #{torrent['id']} | Status: {torrent.get('qb_status', 'unknown')}")
+            print()
+    
+    # Show library-added torrents first (most important for completed ones)
+    if library_added:
+        print(f"\n🎬 ADDED TO LIBRARY ({len(library_added)}):")
+        for torrent in library_added:
+            anilist_info = torrent.get('anilist_info', {})
+            anime_title = anilist_info.get('title', 'Unknown')
+            
+            print(f"  {MAGENTA}📚{RESET} {anime_title}")
+            print(f"    Original: {torrent['title'][:45]}")
+            print(f"    🗃️  ID: #{torrent['id']} | Status: Added to anime library")
+            print()
+    
+    # Show completed torrents
+    if completed:
+        print(f"\n✅ COMPLETED ({len(completed)}):")
+        for torrent in completed:
+            ratio = torrent.get('qb_ratio', 0)
+            speed_up = torrent.get('qb_speed_up', 0)
+            
+            print(f"  {GREEN}✓{RESET} {torrent['title'][:55]}")
+            print(f"    Size: {format_bytes(torrent.get('qb_size', 0))} | Ratio: {ratio:.2f}")
+            if speed_up > 0:
+                print(f"    Upload Speed: {format_speed(speed_up)}")
+            print(f"    🗃️  ID: #{torrent['id']} | Path: {torrent.get('qb_save_path', 'Unknown')}")
+            print()
+    
+    # Show seeding torrents
+    if seeding:
+        print(f"\n🌱 SEEDING ({len(seeding)}):")
+        for torrent in seeding:
+            ratio = torrent.get('qb_ratio', 0)
+            speed_up = torrent.get('qb_speed_up', 0)
+            
+            print(f"  {YELLOW}↗{RESET} {torrent['title'][:55]}")
+            print(f"    Ratio: {ratio:.2f} | Upload Speed: {format_speed(speed_up)}")
+            print(f"    🗃️  ID: #{torrent['id']}")
+            print()
+    
+    # Show paused torrents
+    if paused:
+        print(f"\n⏸️  PAUSED ({len(paused)}):")
+        for torrent in paused:
+            progress = torrent.get('qb_progress', 0)
+            
+            print(f"  {YELLOW}⏸{RESET} {torrent['title'][:55]}")
+            print(f"    Progress: {progress:.1f}% | Status: {torrent.get('qb_status', 'unknown')}")
+            print(f"    🗃️  ID: #{torrent['id']}")
+            print()
+    
+    # Show error torrents
+    if error_torrents:
+        print(f"\n❌ ERRORS ({len(error_torrents)}):")
+        for torrent in error_torrents:
+            print(f"  {RED}✗{RESET} {torrent['title'][:55]}")
+            print(f"    Status: {torrent.get('qb_status', 'unknown')}")
+            print(f"    🗃️  ID: #{torrent['id']}")
+            print()
+    
+    # Show not found torrents
+    if not_found:
+        print(f"\n🔍 NOT FOUND IN QBITTORRENT ({len(not_found)}):")
+        for torrent in not_found:
+            print(f"  {RED}?{RESET} {torrent['title'][:55]}")
+            print(f"    Added: {torrent['added_date'][:10]} | May have been removed from qBittorrent")
+            print(f"    🗃️  ID: #{torrent['id']}")
+            print()
+    
+    # Summary
+    total_downloading = len(downloading)
+    total_completed = len(completed)
+    total_seeding = len(seeding)
+    total_library_added = len(library_added)
+    
+    print("=" * 80)
+    print(f"📊 Summary: {total_downloading} downloading, {total_completed} completed, {total_seeding} seeding, {total_library_added} in library")
+    print("💡 This view shows only torrents added via this script")
 
 if __name__ == "__main__":
     main()
