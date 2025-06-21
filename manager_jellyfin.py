@@ -9,6 +9,136 @@ import feedparser
 from typing import List, Tuple, Optional
 from bs4 import BeautifulSoup
 
+# qBittorrent API configuration
+QBITTORRENT_HOST = "localhost:1337"
+QBITTORRENT_URL = f"http://{QBITTORRENT_HOST}"
+
+def qb_login(username="admin", password=""):
+    """Login to qBittorrent API and return session."""
+    session = requests.Session()
+    try:
+        response = session.post(f"{QBITTORRENT_URL}/api/v2/auth/login", 
+                              data={'username': username, 'password': password})
+        if response.text == "Ok.":
+            return session
+        else:
+            return None
+    except Exception as e:
+        print(f"❌ Error connecting to qBittorrent: {e}")
+        return None
+
+def qb_add_torrent(session, torrent_url, download_path=None):
+    """Add torrent to qBittorrent via URL."""
+    try:
+        data = {'urls': torrent_url}
+        if download_path:
+            data['savepath'] = download_path
+        
+        response = session.post(f"{QBITTORRENT_URL}/api/v2/torrents/add", data=data)
+        return response.text == "Ok."
+    except Exception as e:
+        print(f"❌ Error adding torrent: {e}")
+        return False
+
+def qb_get_torrent_info(session):
+    """Get list of torrents from qBittorrent."""
+    try:
+        response = session.get(f"{QBITTORRENT_URL}/api/v2/torrents/info")
+        if response.status_code == 200:
+            return response.json()
+        return []
+    except Exception as e:
+        print(f"❌ Error getting torrent info: {e}")
+        return []
+
+def qb_check_connection():
+    """Check if qBittorrent is accessible."""
+    try:
+        response = requests.get(f"{QBITTORRENT_URL}/api/v2/app/version", timeout=5)
+        return response.status_code == 200
+    except:
+        return False
+
+# Torrent tracking database functions
+import json
+from datetime import datetime
+
+def get_torrent_db_path():
+    """Get the path to the torrent database file."""
+    anime_folder = get_anime_folder()
+    return os.path.join(anime_folder, "torrent_database.json")
+
+def load_torrent_database():
+    """Load the torrent database from file."""
+    db_path = get_torrent_db_path()
+    try:
+        if os.path.exists(db_path):
+            with open(db_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return {"torrents": [], "last_updated": None}
+    except Exception as e:
+        print(f"⚠️  Warning: Could not load torrent database: {e}")
+        return {"torrents": [], "last_updated": None}
+
+def save_torrent_database(db_data):
+    """Save the torrent database to file."""
+    db_path = get_torrent_db_path()
+    try:
+        # Ensure the anime folder exists
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        
+        db_data["last_updated"] = datetime.now().isoformat()
+        with open(db_path, 'w', encoding='utf-8') as f:
+            json.dump(db_data, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        print(f"❌ Error saving torrent database: {e}")
+        return False
+
+def add_torrent_to_database(torrent_info):
+    """Add a torrent to the tracking database."""
+    db_data = load_torrent_database()
+    
+    # Create torrent entry
+    torrent_entry = {
+        "id": len(db_data["torrents"]) + 1,
+        "title": torrent_info.get("title", "Unknown"),
+        "size": torrent_info.get("size", "Unknown"),
+        "seeds": torrent_info.get("seeds", 0),
+        "leechers": torrent_info.get("leechers", 0),
+        "downloads": torrent_info.get("downloads", 0),
+        "infohash": torrent_info.get("infohash", "N/A"),
+        "category": torrent_info.get("category", "N/A"),
+        "link": torrent_info.get("link", "N/A"),
+        "download_path": torrent_info.get("download_path", "Default"),
+        "added_date": datetime.now().isoformat(),
+        "status": "added",
+        "anilist_info": torrent_info.get("anilist_info", {})
+    }
+    
+    db_data["torrents"].append(torrent_entry)
+    
+    if save_torrent_database(db_data):
+        return torrent_entry["id"]
+    return None
+
+def get_tracked_torrents():
+    """Get all tracked torrents from the database."""
+    db_data = load_torrent_database()
+    return db_data.get("torrents", [])
+
+def update_torrent_status(torrent_id, status):
+    """Update the status of a tracked torrent."""
+    db_data = load_torrent_database()
+    
+    for torrent in db_data["torrents"]:
+        if torrent["id"] == torrent_id:
+            torrent["status"] = status
+            torrent["status_updated"] = datetime.now().isoformat()
+            break
+    
+    return save_torrent_database(db_data)
+
 # ANSI color codes
 CYAN = '\033[96m'      # Bright cyan for movie titles
 YELLOW = '\033[93m'    # Yellow for symlink paths and season names
@@ -787,14 +917,17 @@ def add_anime():
         if not nyaa_results:
             print("No torrents found for this anime on nyaa.si.")
             wait_for_enter()
-            return
-        # Use fake scroll to select a torrent
+            return        # Use fake scroll to select a torrent
+        anilist_info = {"title": title, "year": year, "id": aid}
         while True:
             selected_torrent = navigate_nyaa_results(nyaa_results, window_size=10)
             if not selected_torrent:
                 print("❌ Cancelled.")
                 wait_for_enter()
-                return            # Show file tree, allow Esc to return to torrent list or 'd' to download
+                return
+            
+            # Add AniList info to the selected torrent
+            selected_torrent["anilist_info"] = anilist_info# Show file tree, allow Esc to return to torrent list or 'd' to download
             # Get the torrent page URL from the magnet/download link
             page_url = selected_torrent['link']
             if page_url.endswith('.torrent'):
@@ -820,9 +953,135 @@ def add_anime():
                 
                 if confirm_choice == 1:  # Confirm Download
                     clear_screen()
-                    print("🚧 Download functionality not implemented yet.")
-                    print("💡 This feature will be added in a future update.")
-                    wait_for_enter()
+                    print("🔄 Checking qBittorrent connection...")
+                    print(f"🌐 Host: {QBITTORRENT_HOST}")
+                    print()
+                    
+                    # Check if qBittorrent is accessible
+                    if not qb_check_connection():
+                        print("❌ Cannot connect to qBittorrent.")
+                        print("💡 Make sure qBittorrent is running and Web UI is enabled.")
+                        print(f"💡 Check that Web UI is accessible at: {QBITTORRENT_URL}")
+                        print("💡 Default Web UI settings:")
+                        print("   - Port: 1337")
+                        print("   - Username: admin")
+                        print("   - Password: (usually empty)")
+                        wait_for_enter()
+                        return
+                    
+                    print("✅ qBittorrent is accessible!")
+                    print("🔄 Logging in...")
+                    
+                    # Try to connect to qBittorrent
+                    session = qb_login()
+                    if not session:
+                        print("❌ Failed to authenticate with qBittorrent.")
+                        print("💡 Check your qBittorrent Web UI credentials.")
+                        print("💡 You may need to disable authentication or set proper credentials.")
+                        wait_for_enter()
+                        return
+                    
+                    print("✅ Connected to qBittorrent successfully!")
+                    print(f"📥 Adding torrent: {selected_torrent['title'][:60]}...")
+                    print()
+                    
+                    # Ask for download location
+                    download_options = [
+                        "📁 Use default download location",
+                        "📂 Specify custom download path"
+                    ]
+                    location_choice = navigate_menu(download_options, "📁 Download Location")
+                    
+                    download_path = None
+                    if location_choice == 1:  # Custom path
+                        clear_screen()
+                        print("📂 Custom Download Path")
+                        print("=" * 30)
+                        
+                        # Setup autocomplete for path input
+                        autocomplete_enabled = setup_autocomplete()
+                        if autocomplete_enabled:
+                            print("💡 Use Tab for autocomplete when typing paths")
+                        
+                        try:
+                            download_path = input("Enter download path (or leave empty for default): ").strip().strip('"')
+                        except (EOFError, KeyboardInterrupt):
+                            handle_input_cancellation()
+                            return
+                        
+                        if download_path and not os.path.isdir(download_path):
+                            print(f"⚠️  Directory '{download_path}' does not exist.")
+                            create_options = ["❌ Cancel download", "📁 Create directory", "📂 Use default location"]
+                            create_choice = navigate_menu(create_options, "Directory not found")
+                            
+                            if create_choice == 0:  # Cancel
+                                clear_screen()
+                                print("❌ Download cancelled.")
+                                wait_for_enter()
+                                return
+                            elif create_choice == 1:  # Create directory
+                                try:
+                                    os.makedirs(download_path, exist_ok=True)
+                                    clear_screen()
+                                    print(f"📁 Created directory: {download_path}")
+                                except Exception as e:
+                                    clear_screen()
+                                    print(f"❌ Failed to create directory: {e}")
+                                    download_path = None
+                            else:  # Use default
+                                download_path = None
+                    
+                    # Add torrent to qBittorrent
+                    clear_screen()
+                    print("📥 Adding torrent to qBittorrent...")
+                    if download_path:
+                        print(f"� Download location: {download_path}")
+                    else:
+                        print("📁 Using default download location")
+                    print()
+                    
+                    success = qb_add_torrent(session, selected_torrent['link'], download_path)
+                    
+                    if success:
+                        # Add torrent to tracking database
+                        torrent_db_info = selected_torrent.copy()
+                        torrent_db_info["download_path"] = download_path or "Default"
+                        
+                        torrent_id = add_torrent_to_database(torrent_db_info)
+                        
+                        clear_screen()
+                        print("✅ Torrent added successfully!")
+                        print(f"🎬 Title: {selected_torrent['title']}")
+                        print(f"📊 Size: {selected_torrent['size']}")
+                        if download_path:
+                            print(f"📁 Location: {download_path}")
+                        
+                        if torrent_id:
+                            print(f"🗃️  Database ID: #{torrent_id}")
+                            print("💾 Torrent added to tracking database")
+                        else:
+                            print("⚠️  Warning: Could not save to tracking database")
+                        
+                        print()
+                        print("💡 You can monitor the download progress in qBittorrent.")
+                        
+                        # Show recent torrents
+                        print("\n🔄 Recent torrents in qBittorrent:")
+                        torrents = qb_get_torrent_info(session)
+                        if torrents:
+                            for i, torrent in enumerate(torrents[-3:], 1):  # Show last 3 torrents
+                                state = torrent.get('state', 'unknown')
+                                progress = torrent.get('progress', 0) * 100
+                                print(f"  {i}. {torrent.get('name', 'Unknown')[:50]}...")
+                                print(f"     State: {state} | Progress: {progress:.1f}%")
+                        
+                        wait_for_enter()
+                    else:
+                        clear_screen()
+                        print("❌ Failed to add torrent to qBittorrent.")
+                        print("💡 Check qBittorrent logs for more details.")
+                        wait_for_enter()
+                    
                     return  # Exit the torrent selection loop
                 # If cancelled, continue the loop to show torrent list again
             
@@ -1463,8 +1722,39 @@ def show_torrent_file_tree(torrent_page_url, rss_info=None):
             if key == b'\x1b':  # Esc
                 return False  # Don't download
             elif key.lower() == b'd':  # Download
-                return True   # Download requested
-        time.sleep(0.05)
+                return True   # Download requested            time.sleep(0.05)
+
+def display_tracked_torrents():
+    """Display all torrents tracked by the script."""
+    tracked_torrents = get_tracked_torrents()
+    
+    if not tracked_torrents:
+        clear_screen()
+        print("\n📋 No torrents tracked yet.")
+        print("💡 Torrents will appear here after downloading via the script.")
+        wait_for_enter()
+        return
+    
+    clear_screen()
+    print(f"\n📋 Tracked Torrents ({len(tracked_torrents)} total):")
+    print("=" * 70)
+    
+    for i, torrent in enumerate(tracked_torrents, 1):
+        print(f"{i:3d}. {CYAN}{torrent['title'][:60]}{RESET}")
+        print(f"     📊 Size: {torrent['size']}")
+        print(f"     🌱 Seeds: {torrent['seeds']} | 📉 Leechers: {torrent['leechers']}")
+        print(f"     📁 Path: {torrent['download_path']}")
+        print(f"     📅 Added: {torrent['added_date'][:10]}")
+        
+        # Show AniList info if available
+        if torrent.get('anilist_info'):
+            anilist = torrent['anilist_info']
+            print(f"     🎬 AniList: {anilist.get('title', 'N/A')} ({anilist.get('year', 'N/A')})")
+        
+        print(f"     🗃️  ID: #{torrent['id']} | Status: {torrent.get('status', 'unknown')}")
+        print()
+    
+    wait_for_enter()
 
 def main():
     """Main program loop."""
@@ -1472,8 +1762,7 @@ def main():
     print("🎬 Welcome to Jellyfin Library Manager!")
     print("💡 Use arrow keys to navigate, Enter to select, Esc to exit")
     
-    # Use wait_for_enter for initial prompt
-    wait_for_enter()
+    # Use wait_for_enter for initial prompt    wait_for_enter()
     
     main_options = [
         "1. 📚 List movies in library",
@@ -1482,15 +1771,16 @@ def main():
         "4. 📺 List anime in library",
         "5. ➕ Add new anime to library",
         "6. 🗑️  Remove anime from library",
-        "7. 🔍 Search anime on AniList",
-        "8. 🚪 Exit"
+        "7. 📋 View tracked torrents",
+        "8. 🔍 Search anime on AniList",
+        "9. 🚪 Exit"
     ]
     
     while True:
         try:
             choice = navigate_menu(main_options)
             
-            if choice == -1 or choice == 7:  # Exit
+            if choice == -1 or choice == 8:  # Exit
                 clear_screen()
                 print("👋 Goodbye!")
                 break
@@ -1506,7 +1796,9 @@ def main():
                 add_anime()
             elif choice == 5:  # Remove anime
                 remove_anime()
-            elif choice == 6:  # Search anime
+            elif choice == 6:  # View tracked torrents
+                display_tracked_torrents()
+            elif choice == 7:  # Search anime
                 interactive_anilist_search()
                 
         except KeyboardInterrupt:
