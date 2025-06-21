@@ -59,13 +59,13 @@ class AniListAPI:
     
     def interactive_search(self) -> Optional[Tuple[str, int, int]]:
         """Interactive search for anime using AniList API with pause detection and improved UX."""
-        prompt = "Type the anime name (searches after 2s pause, Esc to cancel):"
+        prompt = "Type the anime name (Esc to cancel):"
         input_str = ''
         last_time = time.time()
         results = []
         search_thread = None
         last_query = ''
-        min_pause = 2.0  # 2 seconds pause
+        min_pause = 0.5  # 0.5 seconds pause
         num_str = ''
 
         def do_search(query: str) -> None:
