@@ -234,7 +234,7 @@ class AnimeManager:
         print(f"✅ Selected: {title} ({year}) [AniList ID: {aid}]")
         print("\nSearching nyaa.si for torrents (via RSS)...")
         
-        nyaa_results = nyaa_rss_search(title, limit=50)
+        nyaa_results = nyaa_rss_search(title, limit=100)
         if isinstance(nyaa_results, str):  # Error message
             self.menu_system.show_error(nyaa_results)
             return
@@ -248,6 +248,19 @@ class AnimeManager:
         
         while True:
             selected_torrent = navigate_nyaa_results(nyaa_results, window_size=10)
+            if selected_torrent == 'HOTKEY_MANUAL_SEARCH':
+                custom_search = self.menu_system.get_user_input("Enter custom search term for nyaa.si: ")
+                if not custom_search:
+                    self.menu_system.show_message("❌ Cancelled custom search.")
+                    continue
+                nyaa_results = nyaa_rss_search(custom_search, limit=100)
+                if isinstance(nyaa_results, str):
+                    self.menu_system.show_error(nyaa_results)
+                    return
+                if not nyaa_results:
+                    self.menu_system.show_message(f"No torrents found for '{custom_search}' on nyaa.si.")
+                    continue
+                continue  # Show new results
             if not selected_torrent:
                 self.menu_system.show_message("❌ Cancelled.")
                 return
@@ -486,12 +499,59 @@ class AnimeManager:
         if remove_symlink_safely(anime_main_folder):
             clear_screen()
             print(f"✅ Removed anime '{anime_name}' from library.")
-            
-            # Ask about original folder
+
+            # Check for associated torrent
+            from database import TorrentDatabase
+            from qbittorrent_api import qb_login, qb_remove_torrent
+            torrent_db = TorrentDatabase()
+            tracked_torrents = torrent_db.get_tracked_torrents()
+            associated_torrent = None
+            for torrent in tracked_torrents:
+                if (
+                    torrent.get("download_path") == target_path or
+                    os.path.abspath(torrent.get("download_path", "")) == os.path.abspath(target_path)
+                ):
+                    associated_torrent = torrent
+                    break
+
+            if associated_torrent and associated_torrent.get("infohash") != "N/A":
+                remove_options = [
+                    "❌ No, keep torrent in qBittorrent",
+                    "🗑️  Yes, remove torrent from qBittorrent (optionally delete files)"
+                ]
+                remove_choice = self.menu_system.navigate_menu(
+                    remove_options,
+                    f"🗑️  Also remove torrent '{associated_torrent.get('title', 'Unknown')}' from qBittorrent?"
+                )
+                if remove_choice == 1:
+                    # Ask if user wants to delete files as well
+                    delete_files_options = [
+                        "❌ No, keep files on disk",
+                        "🗑️  Yes, delete files from disk"
+                    ]
+                    delete_files_choice = self.menu_system.navigate_menu(
+                        delete_files_options,
+                        f"🗑️  Delete files for torrent '{associated_torrent.get('title', 'Unknown')}'?"
+                    )
+                    delete_files = delete_files_choice == 1
+                    session = qb_login()
+                    if session:
+                        success = qb_remove_torrent(session, associated_torrent["infohash"], delete_files)
+                        clear_screen()
+                        if success:
+                            print(f"🗑️  Removed torrent '{associated_torrent.get('title', 'Unknown')}' from qBittorrent.")
+                        else:
+                            print(f"❌ Failed to remove torrent from qBittorrent.")
+                    else:
+                        clear_screen()
+                        print(f"❌ Could not connect to qBittorrent.")
+                    wait_for_enter()
+                    return  # Do not prompt for original folder deletion if torrent was handled
+
+            # Fallback: Ask about original folder
             if target_path not in ["BROKEN LINK", "ACCESS DENIED", "DIRECTORY"] and os.path.exists(target_path):
                 delete_options = ["❌ No, keep original folder", "🗑️  Yes, delete original folder"]
                 delete_choice = self.menu_system.navigate_menu(delete_options, f"🗑️  Also delete '{target_path}'?")
-                
                 if delete_choice == 1:
                     try:
                         shutil.rmtree(target_path)
@@ -503,7 +563,7 @@ class AnimeManager:
                 else:
                     # Clean up Jellyfin files
                     cleanup_jellyfin_files(target_path)
-        
+
         wait_for_enter()
     
     def _remove_anime_with_season_selection(self, anime_name: str, seasons: list) -> None:

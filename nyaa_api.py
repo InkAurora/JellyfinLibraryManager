@@ -71,7 +71,7 @@ class NyaaAPI:
             # Sort results by current sort key
             sorted_results = self.sort_torrents(results, sort_by)
             clear_screen()
-            print(f"Navigate with ↑↓, type number then Enter to select, 's' to sort by {'size' if sort_by == 'seeds' else 'seeds'}, Esc to cancel\n")
+            print(f"Navigate with ↑↓, type number then Enter to select, 's' to sort by {'size' if sort_by == 'seeds' else 'seeds'}, Esc to cancel, / to custom search\n")
             print(f"{'#':<2} {'Seeds':<6} {'Size':<10} Title")
             print("-" * 60)
             
@@ -123,6 +123,8 @@ class NyaaAPI:
                     else:
                         num_str = ''  # Invalid, reset
                 # If Enter with no number, do nothing
+            elif key == b'/':
+                return 'HOTKEY_MANUAL_SEARCH'
             else:
                 num_str = ''  # Reset on any other key
     
