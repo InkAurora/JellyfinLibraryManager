@@ -96,8 +96,8 @@ class TorrentDisplay:
         # Separate torrents by status
         downloading = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['downloading', 'stalledDL', 'queuedDL', 'allocating']]
         seeding = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['uploading', 'stalledUP', 'queuedUP']]
-        completed = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['completedDL']]
-        paused = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['pausedDL', 'pausedUP']]
+        completed = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['pausedUP', 'stalledUP']]
+        paused = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['pausedDL']]
         error_torrents = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['error', 'missingFiles']]
         not_found = [t for t in synced_torrents if not t.get('found_in_qb')]
         library_added = [t for t in synced_torrents if t.get('status') == 'added_to_library']
@@ -119,43 +119,43 @@ class TorrentDisplay:
                 print(f"    🗃️  ID: #{torrent['id']} | Status: {torrent.get('qb_status', 'unknown')}")
                 print()
         
-        # Show library-added torrents (most important for completed ones)
-        if library_added:
-            print(f"\n🎬 ADDED TO LIBRARY ({len(library_added)}):")
-            for torrent in library_added:
-                anilist_info = torrent.get('anilist_info', {})
-                anime_title = anilist_info.get('title', 'Unknown')
+        # # Show library-added torrents (most important for completed ones)
+        # if library_added:
+        #     print(f"\n🎬 ADDED TO LIBRARY ({len(library_added)}):")
+        #     for torrent in library_added:
+        #         anilist_info = torrent.get('anilist_info', {})
+        #         anime_title = anilist_info.get('title', 'Unknown')
                 
-                print(f"  {Colors.MAGENTA}📚{Colors.RESET} {anime_title}")
-                print(f"    Original: {torrent['title'][:45]}")
-                print(f"    🗃️  ID: #{torrent['id']} | Status: Added to anime library")
-                print()
+        #         print(f"  {Colors.MAGENTA}📚{Colors.RESET} {anime_title}")
+        #         print(f"    Original: {torrent['title'][:45]}")
+        #         print(f"    🗃️  ID: #{torrent['id']} | Status: Added to anime library")
+        #         print()
         
-        # Show completed torrents
-        if completed:
-            print(f"\n✅ COMPLETED ({len(completed)}):")
-            for torrent in completed:
-                ratio = torrent.get('qb_ratio', 0)
-                speed_up = torrent.get('qb_speed_up', 0)
+        # # Show completed torrents
+        # if completed:
+        #     print(f"\n✅ COMPLETED ({len(completed)}):")
+        #     for torrent in completed:
+        #         ratio = torrent.get('qb_ratio', 0)
+        #         speed_up = torrent.get('qb_speed_up', 0)
                 
-                print(f"  {Colors.GREEN}✓{Colors.RESET} {torrent['title'][:55]}")
-                print(f"    Size: {format_bytes(torrent.get('qb_size', 0))} | Ratio: {ratio:.2f}")
-                if speed_up > 0:
-                    print(f"    Upload Speed: {format_speed(speed_up)}")
-                print(f"    🗃️  ID: #{torrent['id']} | Path: {torrent.get('qb_save_path', 'Unknown')}")
-                print()
+        #         print(f"  {Colors.GREEN}✓{Colors.RESET} {torrent['title'][:55]}")
+        #         print(f"    Size: {format_bytes(torrent.get('qb_size', 0))} | Ratio: {ratio:.2f}")
+        #         if speed_up > 0:
+        #             print(f"    Upload Speed: {format_speed(speed_up)}")
+        #         print(f"    🗃️  ID: #{torrent['id']} | Path: {torrent.get('qb_save_path', 'Unknown')}")
+        #         print()
         
-        # Show seeding torrents
-        if seeding:
-            print(f"\n🌱 SEEDING ({len(seeding)}):")
-            for torrent in seeding:
-                ratio = torrent.get('qb_ratio', 0)
-                speed_up = torrent.get('qb_speed_up', 0)
+        # # Show seeding torrents
+        # if seeding:
+        #     print(f"\n🌱 SEEDING ({len(seeding)}):")
+        #     for torrent in seeding:
+        #         ratio = torrent.get('qb_ratio', 0)
+        #         speed_up = torrent.get('qb_speed_up', 0)
                 
-                print(f"  {Colors.YELLOW}↗{Colors.RESET} {torrent['title'][:55]}")
-                print(f"    Ratio: {ratio:.2f} | Upload Speed: {format_speed(speed_up)}")
-                print(f"    🗃️  ID: #{torrent['id']}")
-                print()
+        #         print(f"  {Colors.YELLOW}↗{Colors.RESET} {torrent['title'][:55]}")
+        #         print(f"    Ratio: {ratio:.2f} | Upload Speed: {format_speed(speed_up)}")
+        #         print(f"    🗃️  ID: #{torrent['id']}")
+        #         print()
         
         # Show paused torrents (limited to save space)
         if paused:
