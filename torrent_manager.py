@@ -177,6 +177,15 @@ class TorrentManager:
                         os.symlink(file_entry['source'], file_entry['target'])
                     except Exception:
                         pass
+            # Write tracking info to track.json in the anime main folder
+            import json
+            anime_main_folder = file_structure['root']
+            track_path = os.path.join(anime_main_folder, "track.json")
+            try:
+                with open(track_path, "w", encoding="utf-8") as f:
+                    json.dump(torrent, f, indent=2)
+            except Exception as e:
+                pass  # Optionally log or print error
             return True
         except Exception:
             return False

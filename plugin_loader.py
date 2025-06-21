@@ -7,6 +7,8 @@ PLUGIN_FOLDER = os.path.join(os.path.dirname(__file__), 'plugins')
 
 def load_plugins(app_context):
     plugins = []
+    if not os.path.exists(PLUGIN_FOLDER):
+        return plugins
     for filename in os.listdir(PLUGIN_FOLDER):
         if filename.endswith('.py') and not filename.startswith('__'):
             module_name = filename[:-3]

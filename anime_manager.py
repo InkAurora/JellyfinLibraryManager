@@ -4,6 +4,7 @@ Anime management module for the Jellyfin Library Manager.
 
 import os
 import shutil
+import json
 from typing import List, Tuple
 from config import Colors
 from utils import clear_screen, wait_for_enter, validate_directory, is_episode_file
@@ -215,6 +216,7 @@ class AnimeManager:
             if extras_linked > 0:
                 print(f"🎁 Extras linked: {extras_linked} video file(s) → Season 00")
             print("💡 The original files must remain in place for access to work.")
+            
             wait_for_enter()
         else:
             clear_screen()
@@ -502,29 +504,25 @@ class AnimeManager:
             self.menu_system.show_error(f"Cannot remove root anime folder '{anime_base_folder}'.")
             return
         
+        # Check for associated torrent (prefer track.json matching)
+        from database import TorrentDatabase
+        from qbittorrent_api import qb_login, qb_remove_torrent
+        torrent_db = TorrentDatabase()
+        tracked_torrents = torrent_db.get_tracked_torrents()
+        associated_torrent = self._find_associated_torrent_by_track_json(anime_main_folder, tracked_torrents)
+        if not associated_torrent:
+            # Fallback: Match by download_path and infohash
+            for torrent in tracked_torrents:
+                if (os.path.abspath(torrent.get("download_path", "")) == os.path.abspath(anime_main_folder)
+                    and torrent.get("infohash") not in (None, "N/A")):
+                    associated_torrent = torrent
+                    break
+
         if remove_symlink_safely(anime_main_folder):
             clear_screen()
             print(f"✅ Removed anime '{anime_name}' from library.")
 
-            # Check for associated torrent (match using full torrent folder path)
-            from database import TorrentDatabase
-            from qbittorrent_api import qb_login, qb_remove_torrent
-            torrent_db = TorrentDatabase()
-            tracked_torrents = torrent_db.get_tracked_torrents()
-            associated_torrent = None
-            for torrent in tracked_torrents:
-                # Try to match using full torrent folder path (download_path + qb_name)
-                torrent_folder = os.path.join(torrent.get("download_path", ""), torrent.get("qb_name", ""))
-                if os.path.abspath(torrent_folder) == os.path.abspath(anime_main_folder):
-                    associated_torrent = torrent
-                    break
-            # Fallback: try matching by download_path only if qb_name is missing
-            if not associated_torrent:
-                for torrent in tracked_torrents:
-                    if os.path.abspath(torrent.get("download_path", "")) == os.path.abspath(anime_main_folder):
-                        associated_torrent = torrent
-                        break
-            if associated_torrent and associated_torrent.get("infohash") != "N/A":
+            if associated_torrent:
                 remove_options = [
                     "❌ No, keep torrent in qBittorrent",
                     "🗑️  Yes, remove torrent from qBittorrent (optionally delete files)"
@@ -534,7 +532,6 @@ class AnimeManager:
                     f"🗑️  Also remove torrent '{associated_torrent.get('title', 'Unknown')}' from qBittorrent?"
                 )
                 if remove_choice == 1:
-                    # Ask if user wants to delete files as well
                     delete_files_options = [
                         "❌ No, keep files on disk",
                         "🗑️  Yes, delete files from disk"
@@ -571,6 +568,10 @@ class AnimeManager:
                         else:
                             cleanup_jellyfin_files(anime_main_folder)
                     return
+                elif remove_choice == 0:
+                    clear_screen()
+                    print(f"✅ Removed anime '{anime_name}' from library.")
+                    print(f"❌ Kept torrent '{associated_torrent.get('title', 'Unknown')}' in qBittorrent.")
             # Fallback: Ask about original folder if no torrent found
             if os.path.exists(anime_main_folder):
                 delete_options = ["❌ No, keep original folder", "🗑️  Yes, delete original folder"]
@@ -602,60 +603,9 @@ class AnimeManager:
         if season_choice == -1 or season_choice == len(seasons) + 1:  # Esc or Back
             return
         elif season_choice == len(seasons):  # Remove ALL seasons
-            self._remove_all_seasons(anime_name, seasons)
+            self._remove_entire_anime(anime_name, seasons)
         elif 0 <= season_choice < len(seasons):  # Remove specific season
             self._remove_specific_season(anime_name, seasons, season_choice)
-    
-    def _remove_all_seasons(self, anime_name: str, seasons: list) -> None:
-        """Remove all seasons of an anime."""
-        # Confirm removal of entire anime
-        if not self.menu_system.confirm_action(f"❓ Remove entire '{anime_name}' anime?", 
-                                             ["❌ No, cancel", f"✅ Yes, remove all {len(seasons)} season(s)"]):
-            self.menu_system.show_message("⏭️  Cancelled.")
-            return
-        
-        # Remove the entire anime folder
-        anime_main_folder = os.path.dirname(seasons[0][1])
-        
-        # Safety check: Never remove the root anime folder
-        from utils import get_anime_folder
-        anime_base_folder = get_anime_folder()
-        if os.path.abspath(anime_main_folder) == os.path.abspath(anime_base_folder):
-            self.menu_system.show_error(f"Cannot remove root anime folder '{anime_base_folder}'.")
-            return
-        
-        if remove_symlink_safely(anime_main_folder):
-            clear_screen()
-            print(f"✅ Removed entire anime '{anime_name}' from library.")
-            
-            # Ask about original folders
-            original_folders = set()
-            for _, _, target_path in seasons:
-                if target_path not in ["BROKEN LINK", "ACCESS DENIED", "DIRECTORY"] and os.path.exists(target_path):
-                    original_folders.add(target_path)
-            
-            if original_folders:
-                for target_path in original_folders:
-                    delete_options = ["❌ No, keep original folder", "🗑️  Yes, delete original folder"]
-                    delete_choice = self.menu_system.navigate_menu(delete_options, f"🗑️  Also delete '{target_path}'?")
-                    
-                    if delete_choice == 1:
-                        try:
-                            shutil.rmtree(target_path)
-                            clear_screen()
-                            print(f"🗑️  Deleted original folder '{target_path}'.")
-                        except Exception as e:
-                            clear_screen()
-                            print(f"❌ Error deleting original folder: {e}")
-                    else:
-                        # Clean up Jellyfin files
-                        cleanup_jellyfin_files(target_path)
-            else:
-                # No original folders found to handle
-                clear_screen()
-                print("ℹ️  No original folders to handle.")
-        
-        wait_for_enter()
     
     def _remove_specific_season(self, anime_name: str, seasons: list, season_index: int) -> None:
         """Remove a specific season."""
@@ -729,6 +679,26 @@ class AnimeManager:
                 print(f"📁 {len(remaining_seasons)} season(s) remaining: {', '.join(remaining_seasons)}")
         
         wait_for_enter()
+    
+    def _find_associated_torrent_by_track_json(self, anime_main_folder, tracked_torrents):
+        """Try to match a torrent using info from track.json in the anime folder."""
+        track_path = os.path.join(anime_main_folder, "track.json")
+        if not os.path.exists(track_path):
+            return None
+        try:
+            with open(track_path, "r", encoding="utf-8") as f:
+                track_data = json.load(f)
+        except Exception:
+            return None
+        # Try to match by infohash first, then download_path
+        track_infohash = track_data.get("infohash")
+        track_download_path = os.path.abspath(track_data.get("download_path", ""))
+        for torrent in tracked_torrents:
+            if track_infohash and torrent.get("infohash") == track_infohash:
+                return torrent
+            if track_download_path and os.path.abspath(torrent.get("download_path", "")) == track_download_path:
+                return torrent
+        return None
 
 
 # Global instance for backward compatibility
