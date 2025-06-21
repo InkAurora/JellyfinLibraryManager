@@ -794,8 +794,7 @@ def add_anime():
             if not selected_torrent:
                 print("❌ Cancelled.")
                 wait_for_enter()
-                return
-            # Show file tree, allow Esc to return to torrent list
+                return            # Show file tree, allow Esc to return to torrent list or 'd' to download
             # Get the torrent page URL from the magnet/download link
             page_url = selected_torrent['link']
             if page_url.endswith('.torrent'):
@@ -803,8 +802,31 @@ def add_anime():
                 m = re.search(r'/download/(\d+)\.torrent', page_url)
                 if m:
                     page_url = f'https://nyaa.si/view/{m.group(1)}'
-            show_torrent_file_tree(page_url, rss_info=selected_torrent)
-            # After Esc, return to torrent list for reselection
+            
+            download_requested = show_torrent_file_tree(page_url, rss_info=selected_torrent)
+            
+            if download_requested:
+                # Show download confirmation
+                clear_screen()
+                print(f"📥 Download Torrent: {selected_torrent['title']}")
+                print("=" * 60)
+                print(f"🔗 Link: {selected_torrent['link']}")
+                print(f"📊 Size: {selected_torrent['size']}")
+                print(f"🌱 Seeds: {selected_torrent['seeds']}")
+                print()
+                
+                confirm_options = ["❌ Cancel", "✅ Confirm Download"]
+                confirm_choice = navigate_menu(confirm_options, "📥 Confirm Download")
+                
+                if confirm_choice == 1:  # Confirm Download
+                    clear_screen()
+                    print("🚧 Download functionality not implemented yet.")
+                    print("💡 This feature will be added in a future update.")
+                    wait_for_enter()
+                    return  # Exit the torrent selection loop
+                # If cancelled, continue the loop to show torrent list again
+            
+            # After Esc or cancel, return to torrent list for reselection
 
 def remove_anime():
     """Remove an anime series or specific seasons from the library."""
@@ -1429,12 +1451,19 @@ def show_torrent_file_tree(torrent_page_url, rss_info=None):
         file_tree = file_tree[1:]
     for line in file_tree:
         print(line)
-    print("\nTorrent File List (Esc to return)")
+    print("\n" + "=" * 60)
+    print("📥 DOWNLOAD OPTIONS")
+    print("=" * 60)
+    print("Press 'd' to download this torrent")
+    print("Press Esc to return to torrent list")
+    
     while True:
         if msvcrt.kbhit():
             key = msvcrt.getch()
             if key == b'\x1b':  # Esc
-                return
+                return False  # Don't download
+            elif key.lower() == b'd':  # Download
+                return True   # Download requested
         time.sleep(0.05)
 
 def main():
