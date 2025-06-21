@@ -2310,61 +2310,79 @@ def main():
             wait_for_enter()
 
 def add_completed_torrent_to_library(torrent, download_path):
-    """Add a completed torrent to the anime library using AniList info."""
+    """Add a completed torrent to the anime library using AniList info.
+    
+    This function exactly mirrors the manual add_anime logic:
+    - Treats the torrent download path as the source folder
+    - Creates individual symlinks for each episode file found
+    - Uses AniList info to determine anime name and season
+    """
     try:
         anilist_info = torrent.get('anilist_info', {})
         anime_title = anilist_info.get('title', 'Unknown Anime')
-        
-        # Check if download path contains episode files
+        torrent_title = torrent.get('title', 'Unknown')
+          # Check if download path exists
         if not os.path.exists(download_path):
             return False
         
-        # Find episode files in the download path
+        # Exactly mirror manual logic: find episode files in the torrent's download folder
         episode_files = []
+        source_folder = download_path
         
-        # Check if it's a single file or directory
+        # Check if it's a single file (rare case)
         if os.path.isfile(download_path):
             if is_episode_file(download_path):
-                episode_files = [download_path]
-                download_path = os.path.dirname(download_path)
+                episode_files.append(os.path.basename(download_path))
+                source_folder = os.path.dirname(download_path)
         else:
-            # Check for episode files in the directory
-            for root, dirs, files in os.walk(download_path):
-                for file in files:
-                    if is_episode_file(file):
-                        episode_files.append(os.path.join(root, file))
+            # This is a directory - check ONLY files in this specific directory
+            # (exactly like manual process checks only the user-selected folder)
+            try:
+                items_in_torrent_folder = os.listdir(download_path)
+                for item in items_in_torrent_folder:
+                    item_path = os.path.join(download_path, item)
+                    if os.path.isfile(item_path) and is_episode_file(item):
+                        episode_files.append(item)
+                    
+            except PermissionError:
+                return False
         
         if not episode_files:
             return False
         
-        # Create anime library structure
+        # Create anime library structure        # Exactly mirror manual logic: create anime folder structure and symlinks
         anime_base_folder = get_anime_folder()
         anime_main_folder = os.path.join(anime_base_folder, anime_title)
-        season_folder = os.path.join(anime_main_folder, "Season 01")
+        season_folder = os.path.join(anime_main_folder, "Season 01")  # Default to Season 01
         
-        # Create directories
-        os.makedirs(season_folder, exist_ok=True)
+        # Create directory structure (exactly like manual process)
+        try:
+            os.makedirs(season_folder, exist_ok=True)
+        except Exception as e:
+            return False
         
-        # Create symlinks for episode files
-        linked_count = 0
+        # Create individual symlinks for each episode file (exactly like manual process)
+        episode_files_linked = 0
+        
         for episode_file in episode_files:
-            episode_name = os.path.basename(episode_file)
-            target_file = os.path.join(season_folder, episode_name)
+            # Build source path (from torrent download folder)
+            source_file = os.path.join(source_folder, episode_file)
+            # Build target path (in anime library)
+            target_file = os.path.join(season_folder, episode_file)
             
             # Skip if symlink already exists
             if os.path.exists(target_file):
                 continue
             
             try:
-                os.symlink(episode_file, target_file)
-                linked_count += 1
+                os.symlink(source_file, target_file)
+                episode_files_linked += 1
             except Exception as e:
-                print(f"⚠️  Warning: Could not create symlink for '{episode_name}': {e}")
+                pass  # Continue trying other files even if one fails
         
-        return linked_count > 0
+        return episode_files_linked > 0
     
     except Exception as e:
-        print(f"❌ Error adding torrent to library: {e}")
         return False
 
 def auto_add_completed_torrents():
@@ -2394,14 +2412,22 @@ def auto_add_completed_torrents():
             # This ensures we don't try to add random torrents that happen to be in qBittorrent
             if not torrent.get('anilist_info'):
                 continue
-            
-            # Get the download path from qBittorrent
+              # Get the download path from qBittorrent
             download_path = torrent.get('qb_save_path', '')
-            if not download_path or not os.path.exists(download_path):
+            torrent_name = torrent.get('qb_name', '')
+            
+            if not download_path or not torrent_name:
+                continue
+              # Construct the full path to the torrent's folder
+            # qb_save_path is the base download directory (e.g., "C:\Torrents")
+            # qb_name is the torrent folder name (e.g., "Domestic Girlfriend S01 1080p...")
+            full_torrent_path = os.path.join(download_path, torrent_name)
+            
+            if not os.path.exists(full_torrent_path):
                 continue
             
             # Try to add to library
-            success = add_completed_torrent_to_library(torrent, download_path)
+            success = add_completed_torrent_to_library(torrent, full_torrent_path)
             
             if success:
                 completed_torrents.append(torrent)
