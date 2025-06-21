@@ -24,8 +24,7 @@ class JellyfinLibraryManager:
             "5. ➕ Add new anime to library",
             "6. 🗑️  Remove anime from library",
             "7. 📋 View tracked torrents",
-            "8. 🔍 Search anime on AniList",
-            "9. 🚪 Exit"
+            "8. 🚪 Exit"
         ]
     
     def start(self) -> None:
@@ -47,8 +46,8 @@ class JellyfinLibraryManager:
         while self.running:
             try:
                 choice = navigate_menu(self.main_options)
-                
-                if choice == -1 or choice == 8:  # Exit
+
+                if choice == -1 or choice == 7:  # Exit
                     self.exit_application()
                 elif choice == 0:  # List movies
                     display_movies()
@@ -64,9 +63,7 @@ class JellyfinLibraryManager:
                     remove_anime()
                 elif choice == 6:  # View tracked torrents
                     display_tracked_torrents_with_auto_refresh()
-                elif choice == 7:  # Search anime
-                    interactive_anilist_search()
-                    
+
             except KeyboardInterrupt:
                 self.exit_application()
             except Exception as e:
