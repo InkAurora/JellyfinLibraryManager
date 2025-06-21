@@ -71,72 +71,79 @@ class TorrentManager:
         
         return synced_torrents, None
     
+    def sort_torrent_files_for_jellyfin(self, torrent: Dict[str, Any], download_path: str) -> Optional[Dict[str, Any]]:
+        """
+        Sorts and organizes the torrent's files into a folder structure compatible with Jellyfin.
+        Returns a file structure dictionary describing the desired layout:
+        {
+            'root': '/path/to/anime',
+            'folders': [
+                {'path': '/path/to/anime/Season 01', 'files': [
+                    {'source': '/downloads/ep1.mkv', 'target': '/path/to/anime/Season 01/ep1.mkv'},
+                    ...
+                ]},
+                ...
+            ]
+        }
+        This structure can be customized by plugins.
+        """
+        anilist_info = torrent.get('anilist_info', {})
+        anime_title = anilist_info.get('title', 'Unknown Anime')
+        anime_base_folder = get_anime_folder()
+        anime_main_folder = os.path.join(anime_base_folder, anime_title)
+        season_folder = os.path.join(anime_main_folder, "Season 01")
+        file_structure = {
+            'root': anime_main_folder,
+            'folders': []
+        }
+        episode_files = []
+        source_folder = download_path
+        if os.path.isfile(download_path):
+            if is_episode_file(download_path):
+                episode_files.append(os.path.basename(download_path))
+                source_folder = os.path.dirname(download_path)
+        else:
+            try:
+                items_in_torrent_folder = os.listdir(download_path)
+                for item in items_in_torrent_folder:
+                    item_path = os.path.join(download_path, item)
+                    if os.path.isfile(item_path) and is_episode_file(item):
+                        episode_files.append(item)
+            except Exception:
+                return None
+        folder_entry = {
+            'path': season_folder,
+            'files': []
+        }
+        for episode_file in episode_files:
+            folder_entry['files'].append({
+                'source': os.path.join(source_folder, episode_file),
+                'target': os.path.join(season_folder, episode_file)
+            })
+        file_structure['folders'].append(folder_entry)
+        return file_structure
+
     def add_completed_torrent_to_library(self, torrent: Dict[str, Any], download_path: str) -> bool:
         """Add a completed torrent to the anime library using AniList info."""
         try:
-            anilist_info = torrent.get('anilist_info', {})
-            anime_title = anilist_info.get('title', 'Unknown Anime')
-            
-            # Check if download path exists
-            if not os.path.exists(download_path):
+            file_structure = self.sort_torrent_files_for_jellyfin(torrent, download_path)
+            if not file_structure:
                 return False
-            
-            # Find episode files in the torrent's download folder
-            episode_files = []
-            source_folder = download_path
-            
-            # Check if it's a single file (rare case)
-            if os.path.isfile(download_path):
-                if is_episode_file(download_path):
-                    episode_files.append(os.path.basename(download_path))
-                    source_folder = os.path.dirname(download_path)
-            else:
-                # This is a directory - check ONLY files in this specific directory
+            # Create folders and symlinks as described in the file structure
+            for folder in file_structure['folders']:
                 try:
-                    items_in_torrent_folder = os.listdir(download_path)
-                    for item in items_in_torrent_folder:
-                        item_path = os.path.join(download_path, item)
-                        if os.path.isfile(item_path) and is_episode_file(item):
-                            episode_files.append(item)
-                except PermissionError:
+                    os.makedirs(folder['path'], exist_ok=True)
+                except Exception:
                     return False
-            
-            if not episode_files:
-                return False
-            
-            # Create anime library structure
-            anime_base_folder = get_anime_folder()
-            anime_main_folder = os.path.join(anime_base_folder, anime_title)
-            season_folder = os.path.join(anime_main_folder, "Season 01")  # Default to Season 01
-            
-            # Create directory structure
-            try:
-                os.makedirs(season_folder, exist_ok=True)
-            except Exception as e:
-                return False
-            
-            # Create individual symlinks for each episode file
-            episode_files_linked = 0
-            
-            for episode_file in episode_files:
-                # Build source path (from torrent download folder)
-                source_file = os.path.join(source_folder, episode_file)
-                # Build target path (in anime library)
-                target_file = os.path.join(season_folder, episode_file)
-                
-                # Skip if symlink already exists
-                if os.path.exists(target_file):
-                    continue
-                
-                try:
-                    os.symlink(source_file, target_file)
-                    episode_files_linked += 1
-                except Exception as e:
-                    pass  # Continue trying other files even if one fails
-            
-            return episode_files_linked > 0
-        
-        except Exception as e:
+                for file_entry in folder['files']:
+                    if os.path.exists(file_entry['target']):
+                        continue
+                    try:
+                        os.symlink(file_entry['source'], file_entry['target'])
+                    except Exception:
+                        pass
+            return True
+        except Exception:
             return False
     
     def auto_add_completed_torrents(self) -> List[Dict[str, Any]]:
@@ -191,6 +198,13 @@ class TorrentManager:
                     update_torrent_status(torrent['id'], 'added_to_library')
         
         return completed_torrents
+
+    def set_sort_torrent_files_for_jellyfin(self, func):
+        """
+        Allow plugins to override the file sorting logic for Jellyfin.
+        Pass a function with the same signature as sort_torrent_files_for_jellyfin.
+        """
+        self.sort_torrent_files_for_jellyfin = func.__get__(self, self.__class__)
 
 
 # Global instance for backward compatibility
