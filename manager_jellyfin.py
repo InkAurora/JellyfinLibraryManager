@@ -2374,19 +2374,25 @@ def auto_add_completed_torrents():
     
     if error or not synced_torrents:
         return []
-    
-    # Find newly completed torrents
+      # Find newly completed torrents
     completed_torrents = []
     
     for torrent in synced_torrents:
-        # Check if torrent is completed and not already processed
+        # Check if torrent is completed/seeding and not already processed
+        # Include: completedDL (just finished), uploading/stalledUP/queuedUP (seeding states)
+        completed_states = ['completedDL', 'uploading', 'stalledUP', 'queuedUP']
+        
         if (torrent.get('found_in_qb') and 
-            torrent.get('qb_status') == 'completedDL' and 
+            torrent.get('qb_status') in completed_states and 
             torrent.get('status') != 'added_to_library'):
-            
-            # Get AniList info for proper naming
+              # Get AniList info for proper naming
             anilist_info = torrent.get('anilist_info', {})
             if not anilist_info.get('title'):
+                continue
+            
+            # Additional safety check - only process torrents that were added via this script
+            # This ensures we don't try to add random torrents that happen to be in qBittorrent
+            if not torrent.get('anilist_info'):
                 continue
             
             # Get the download path from qBittorrent
