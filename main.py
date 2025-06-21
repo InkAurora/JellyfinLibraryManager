@@ -9,6 +9,7 @@ from anime_manager import display_anime, add_anime, remove_anime
 from torrent_display import display_tracked_torrents_with_auto_refresh
 from anilist_api import interactive_anilist_search
 from background_monitor import background_monitor
+from plugin_loader import load_plugins
 
 
 class JellyfinLibraryManager:
@@ -16,6 +17,7 @@ class JellyfinLibraryManager:
     
     def __init__(self):
         self.running = True
+        self.plugins = []
         self.main_options = [
             "1. 📚 List movies in library",
             "2. ➕ Add new movie to library", 
@@ -35,6 +37,9 @@ class JellyfinLibraryManager:
         
         # Start background torrent monitoring
         background_monitor.start_monitoring()
+        
+        # Load plugins
+        self.plugins = load_plugins(app_context=self)
         
         # Use wait_for_enter for initial prompt
         wait_for_enter()
