@@ -18,59 +18,6 @@ class TorrentDisplay:
     def __init__(self):
         self.menu_system = MenuSystem()
     
-    def display_tracked_torrents(self) -> None:
-        """Display all torrents tracked by the script with real-time qBittorrent status."""
-        clear_screen()
-        
-        # Check for pending notifications from background monitoring
-        notifications = get_pending_notifications()
-        if notifications:
-            print("🎉 NEW ANIME ADDED TO LIBRARY!")
-            print("=" * 40)
-            for notification in notifications:
-                print(f"📚 {notification['message']}")
-            print("=" * 40)
-            print()
-            wait_for_enter()
-            clear_screen()
-        
-        print("🔄 Syncing with qBittorrent...")
-        print("🤖 Background monitoring is active - completed torrents auto-added to library")
-        print()
-        
-        # Sync with qBittorrent to get current status
-        synced_torrents, error = sync_torrents_with_qbittorrent()
-        
-        if error:
-            clear_screen()
-            print(f"\n❌ Error syncing with qBittorrent: {error}")
-            print("💡 Make sure qBittorrent is running and Web UI is accessible.")
-            wait_for_enter()
-            return
-        
-        if not synced_torrents:
-            clear_screen()
-            print("\n📋 No torrents tracked yet.")
-            print("💡 Torrents will appear here after downloading via the script.")
-            wait_for_enter()
-            return
-        
-        self._show_torrent_status(synced_torrents)
-        
-        print("🔄 Press any key to refresh, Esc to return to main menu")
-        
-        # Wait for user input with refresh option
-        while True:
-            if msvcrt.kbhit():
-                key = msvcrt.getch()
-                if key == b'\x1b':  # Esc
-                    return
-                else:
-                    # Any other key refreshes the display
-                    self.display_tracked_torrents()
-                    return
-            time.sleep(0.1)
-    
     def display_tracked_torrents_with_auto_refresh(self) -> None:
         """Display tracked torrents with auto-refresh every 5 seconds."""
         last_refresh = 0
@@ -143,112 +90,6 @@ class TorrentDisplay:
             return
         
         self._show_torrent_status_compact(synced_torrents)
-    
-    def _show_torrent_status(self, synced_torrents: List[Dict[str, Any]]) -> None:
-        """Show detailed torrent status."""
-        # Separate torrents by status
-        downloading = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['downloading', 'stalledDL', 'queuedDL', 'allocating']]
-        seeding = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['uploading', 'stalledUP', 'queuedUP']]
-        completed = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['completedDL']]
-        paused = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['pausedDL', 'pausedUP']]
-        error_torrents = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['error', 'missingFiles']]
-        not_found = [t for t in synced_torrents if not t.get('found_in_qb')]
-        library_added = [t for t in synced_torrents if t.get('status') == 'added_to_library']
-        
-        clear_screen()
-        print(f"\n📋 Tracked Torrents Progress ({len(synced_torrents)} total)")
-        print("=" * 80)
-        
-        # Show downloading torrents first (most important)
-        if downloading:
-            print(f"\n📥 DOWNLOADING ({len(downloading)}):")
-            for torrent in downloading:
-                progress = torrent.get('qb_progress', 0)
-                speed_dl = torrent.get('qb_speed_dl', 0)
-                eta = torrent.get('qb_eta', 0)
-                
-                print(f"  {Colors.GREEN}▶{Colors.RESET} {torrent['title'][:55]}")
-                print(f"    Progress: {Colors.GREEN}{progress:.1f}%{Colors.RESET} | Speed: {format_speed(speed_dl)} | ETA: {format_eta(eta)}")
-                print(f"    Size: {format_bytes(torrent.get('qb_size', 0))} | Downloaded: {format_bytes(torrent.get('qb_downloaded', 0))}")
-                print(f"    🗃️  ID: #{torrent['id']} | Status: {torrent.get('qb_status', 'unknown')}")
-                print()
-        
-        # Show library-added torrents (most important for completed ones)
-        if library_added:
-            print(f"\n🎬 ADDED TO LIBRARY ({len(library_added)}):")
-            for torrent in library_added:
-                anilist_info = torrent.get('anilist_info', {})
-                anime_title = anilist_info.get('title', 'Unknown')
-                
-                print(f"  {Colors.MAGENTA}📚{Colors.RESET} {anime_title}")
-                print(f"    Original: {torrent['title'][:45]}")
-                print(f"    🗃️  ID: #{torrent['id']} | Status: Added to anime library")
-                print()
-        
-        # Show completed torrents
-        if completed:
-            print(f"\n✅ COMPLETED ({len(completed)}):")
-            for torrent in completed:
-                ratio = torrent.get('qb_ratio', 0)
-                speed_up = torrent.get('qb_speed_up', 0)
-                
-                print(f"  {Colors.GREEN}✓{Colors.RESET} {torrent['title'][:55]}")
-                print(f"    Size: {format_bytes(torrent.get('qb_size', 0))} | Ratio: {ratio:.2f}")
-                if speed_up > 0:
-                    print(f"    Upload Speed: {format_speed(speed_up)}")
-                print(f"    🗃️  ID: #{torrent['id']} | Path: {torrent.get('qb_save_path', 'Unknown')}")
-                print()
-        
-        # Show seeding torrents
-        if seeding:
-            print(f"\n🌱 SEEDING ({len(seeding)}):")
-            for torrent in seeding:
-                ratio = torrent.get('qb_ratio', 0)
-                speed_up = torrent.get('qb_speed_up', 0)
-                
-                print(f"  {Colors.YELLOW}↗{Colors.RESET} {torrent['title'][:55]}")
-                print(f"    Ratio: {ratio:.2f} | Upload Speed: {format_speed(speed_up)}")
-                print(f"    🗃️  ID: #{torrent['id']}")
-                print()
-        
-        # Show paused torrents
-        if paused:
-            print(f"\n⏸️  PAUSED ({len(paused)}):")
-            for torrent in paused:
-                progress = torrent.get('qb_progress', 0)
-                
-                print(f"  {Colors.YELLOW}⏸{Colors.RESET} {torrent['title'][:55]}")
-                print(f"    Progress: {progress:.1f}% | Status: {torrent.get('qb_status', 'unknown')}")
-                print(f"    🗃️  ID: #{torrent['id']}")
-                print()
-        
-        # Show error torrents
-        if error_torrents:
-            print(f"\n❌ ERRORS ({len(error_torrents)}):")
-            for torrent in error_torrents:
-                print(f"  {Colors.RED}✗{Colors.RESET} {torrent['title'][:55]}")
-                print(f"    Status: {torrent.get('qb_status', 'unknown')}")
-                print(f"    🗃️  ID: #{torrent['id']}")
-                print()
-        
-        # Show not found torrents
-        if not_found:
-            print(f"\n🔍 NOT FOUND IN QBITTORRENT ({len(not_found)}):")
-            for torrent in not_found:
-                print(f"  {Colors.RED}?{Colors.RESET} {torrent['title'][:55]}")
-                print(f"    Added: {torrent['added_date'][:10]} | May have been removed from qBittorrent")
-                print(f"    🗃️  ID: #{torrent['id']}")
-                print()
-        
-        # Summary
-        total_downloading = len(downloading)
-        total_completed = len(completed)
-        total_seeding = len(seeding)
-        total_library_added = len(library_added)
-        
-        print("=" * 80)
-        print(f"📊 Summary: {total_downloading} downloading, {total_completed} completed, {total_seeding} seeding, {total_library_added} in library")
-        print("💡 This view shows only torrents added via this script")
     
     def _show_torrent_status_compact(self, synced_torrents: List[Dict[str, Any]]) -> None:
         """Show compact torrent status for auto-refresh view."""
@@ -363,11 +204,6 @@ _torrent_display = TorrentDisplay()
 
 
 # Legacy functions for backward compatibility
-def display_tracked_torrents() -> None:
-    """Display tracked torrents. (Legacy function)"""
-    _torrent_display.display_tracked_torrents()
-
-
 def display_tracked_torrents_with_auto_refresh() -> None:
     """Display tracked torrents with auto-refresh. (Legacy function)"""
     _torrent_display.display_tracked_torrents_with_auto_refresh()
