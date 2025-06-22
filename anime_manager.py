@@ -35,28 +35,47 @@ class AnimeManager:
         print("=" * 60)
         
         for i, (anime_name, seasons) in enumerate(anime_list, 1):
-            # Count total episodes across all seasons
+            # Count total episodes, specials, and movies across all seasons
             total_episodes = 0
+            total_movies = 0
+            total_specials = 0
             broken_seasons = 0
             
             print(f"{i:3d}. {Colors.MAGENTA}{anime_name}{Colors.RESET}")
             
             for season_name, season_path, target_path in seasons:
+                if season_name == "Movies":
+                    # Count movie files in Movies folder
+                    if os.path.exists(season_path):
+                        movie_files = [f for f in os.listdir(season_path)
+                                       if os.path.isfile(os.path.join(season_path, f)) and is_episode_file(f)]
+                        total_movies += len(movie_files)
+                if season_name == "Season 00":
+                    # Count specials in Season 00
+                    if os.path.exists(season_path):
+                        special_files = [f for f in os.listdir(season_path)
+                                         if os.path.isfile(os.path.join(season_path, f)) and is_episode_file(f)]
+                        total_specials += len(special_files)
+                if season_name.startswith("Season ") and season_name != "Season 00":
+                    # Count episodes in regular seasons
+                    if os.path.exists(season_path):
+                        episode_files = [f for f in os.listdir(season_path)
+                                         if os.path.isfile(os.path.join(season_path, f)) and is_episode_file(f)]
+                        total_episodes += len(episode_files)
                 status = "❌ BROKEN" if target_path in ["BROKEN LINK", "ACCESS DENIED", "NO_SYMLINKS", "EMPTY"] else "✅ OK"
                 
                 if status == "❌ BROKEN":
                     broken_seasons += 1
-                
-                print(f"     📍 {Colors.YELLOW}{season_name}{Colors.RESET}: {status}")
-                
+
+                print(f"     📍 {Colors.YELLOW}{"Specials" if season_name == "Season 00" else season_name}{Colors.RESET}: {status}")
+
                 if target_path not in ["BROKEN LINK", "ACCESS DENIED", "DIRECTORY", "NO_SYMLINKS", "EMPTY"]:
-                    print(f"       🎬 Target: {Colors.GREEN}{target_path}{Colors.RESET}")
+                    # print(f"       🎬 Target: {Colors.GREEN}{target_path}{Colors.RESET}")
                     # Count episodes by looking at the symlinks in the season folder itself
                     try:
                         if os.path.exists(season_path):
                             episode_count = len([f for f in os.listdir(season_path) 
                                                if os.path.isfile(os.path.join(season_path, f)) and is_episode_file(f)])
-                            total_episodes += episode_count
                             print(f"       📺 Episodes: {episode_count}")
                     except:
                         pass
@@ -72,6 +91,10 @@ class AnimeManager:
             # Summary for the anime
             if total_episodes > 0:
                 print(f"     📊 Total Episodes: {total_episodes}")
+            if total_movies > 0:
+                print(f"     🎬 Movies: {total_movies}")
+            if total_specials > 0:
+                print(f"     🎉 Specials: {total_specials}")
             if broken_seasons > 0:
                 print(f"     ⚠️  Broken Seasons: {broken_seasons}")
             print()

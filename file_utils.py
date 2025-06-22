@@ -65,7 +65,7 @@ def list_anime() -> List[Tuple[str, List[Tuple[str, str, str]]]]:
             # Check for season folders
             for item in os.listdir(anime_path):
                 item_path = os.path.join(anime_path, item)
-                if os.path.isdir(item_path) and item.startswith("Season "):
+                if os.path.isdir(item_path) and (item.startswith("Season ") or item == "Movies"):
                     try:
                         season_contents = os.listdir(item_path)
                         if season_contents:
