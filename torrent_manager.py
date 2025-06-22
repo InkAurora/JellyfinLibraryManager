@@ -91,7 +91,7 @@ class TorrentManager:
         file_structure = {'root': anime_main_folder, 'folders': []}
         # Helper regexes
         season_regex = re.compile(r'(season[ _-]?(\d+)|s(\d{1,2}))(?!\d)', re.IGNORECASE)
-        specials_regex = re.compile(r'(special|extra|ova|sp|nced|ncop)', re.IGNORECASE)
+        specials_regex = re.compile(r'(special|extra|ova|sp|nced|ncop|s00)', re.IGNORECASE)
         # Walk the torrent directory
         folder_map = {}
         for root, dirs, files in os.walk(download_path):
