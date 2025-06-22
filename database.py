@@ -96,6 +96,15 @@ class TorrentDatabase:
             if torrent["id"] == torrent_id:
                 return torrent
         return None
+    
+    def remove_torrents_by_infohash(self, infohash: str) -> int:
+        """Remove all torrents from the database that match the given infohash. Returns number removed."""
+        db_data = self.load()
+        before = len(db_data["torrents"])
+        db_data["torrents"] = [t for t in db_data["torrents"] if t.get("infohash") != infohash]
+        removed = before - len(db_data["torrents"])
+        self.save(db_data)
+        return removed
 
 
 class NotificationManager:

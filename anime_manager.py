@@ -484,12 +484,57 @@ class AnimeManager:
             status = f"({season_count} season(s)" + (f", {broken_count} broken" if broken_count > 0 else "") + ")"
             anime_options.append(f"{i:3d}. {anime_name} {status}")
         
+        # Get tracked torrents from database that are still downloading
+        from database import TorrentDatabase
+        from qbittorrent_api import qb_check_connection, qb_login, qb_get_torrent_info, qb_remove_torrent
+        downloading_torrents = []
+        torrent_db = TorrentDatabase()
+        tracked_torrents = torrent_db.get_tracked_torrents()
+        qb_torrents = []
+        if qb_check_connection():
+            session = qb_login()
+            if session:
+                qb_torrents = qb_get_torrent_info(session)
+        # Match tracked torrents to qbittorrent torrents by infohash and filter for downloading
+        for tracked in tracked_torrents:
+            for qb_t in qb_torrents:
+                if qb_t.get('hash', '').lower() == tracked.get('infohash', '').lower():
+                    if qb_t.get('state') not in ['completedDL', 'uploading', 'stalledUP', 'queuedUP']:
+                        # Merge info for display
+                        downloading_torrents.append({**tracked, **qb_t})
+                    break
+        # Add downloading torrents to menu
+        if downloading_torrents:
+            anime_options.append("⬇️  Remove downloading torrents...")
         anime_options.append("🔙 Back to main menu")
         
-        # Navigate through anime
-        choice = self.menu_system.navigate_menu(anime_options, "🗑️  REMOVE ANIME")
+        # Navigate through anime and downloading torrents
+        choice = self.menu_system.navigate_menu(anime_options, "🗑️  REMOVE ANIME OR TORRENT")
         
-        if choice == -1 or choice == len(anime_list):  # Esc pressed or Back selected
+        if choice == -1 or choice == len(anime_options) - 1:  # Esc pressed or Back selected
+            return
+        if downloading_torrents and choice == len(anime_options) - 2:
+            # Show downloading torrents for removal
+            torrent_titles = [f"{t.get('title', t.get('name', 'Unknown'))} [{t.get('state', 'unknown')}]" for t in downloading_torrents]
+            torrent_titles.append("🔙 Back")
+            t_choice = self.menu_system.navigate_menu(torrent_titles, "Select downloading torrent to remove")
+            if t_choice == -1 or t_choice == len(torrent_titles) - 1:
+                return
+            selected_torrent = downloading_torrents[t_choice]
+            confirm = self.menu_system.confirm_action(f"Remove downloading torrent '{selected_torrent.get('title', selected_torrent.get('name', 'Unknown'))}'?", ["❌ No", "🗑️  Yes"])
+            if confirm:
+                session = qb_login()
+                if session:
+                    success = qb_remove_torrent(session, selected_torrent.get('hash'), delete_files=True)
+                    # Remove from database by infohash
+                    from database import TorrentDatabase
+                    TorrentDatabase().remove_torrents_by_infohash(selected_torrent.get('infohash'))
+                    clear_screen()
+                    if success:
+                        print(f"🗑️  Removed downloading torrent '{selected_torrent.get('title', selected_torrent.get('name', 'Unknown'))}'.")
+                    else:
+                        print(f"❌ Failed to remove torrent.")
+                    wait_for_enter()
             return
         
         if 0 <= choice < len(anime_list):
