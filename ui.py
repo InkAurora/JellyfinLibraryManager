@@ -73,8 +73,9 @@ class MenuSystem:
         try:
             readline.set_completer(path_completer)
             readline.parse_and_bind("tab: complete")
-            # Set word delimiters (don't break on path separators)
-            readline.set_completer_delims(' \t\n')
+            # Set word delimiters (exclude spaces to handle paths with spaces)
+            # Only use tab and newline as delimiters
+            readline.set_completer_delims('\t\n')
             return True
         except Exception:
             return False

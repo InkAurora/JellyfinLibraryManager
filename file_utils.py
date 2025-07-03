@@ -310,6 +310,10 @@ def path_completer(text: str, state: int) -> Optional[str]:
         if add_quote:
             filtered_matches = ['"' + match + '"' if not match.startswith('"') else match 
                               for match in filtered_matches]
+        else:
+            # Auto-quote paths with spaces for easier input
+            filtered_matches = ['"' + match + '"' if ' ' in match else match 
+                              for match in filtered_matches]
         
         # Return the match for the current state
         if state < len(filtered_matches):
