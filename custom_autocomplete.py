@@ -1,6 +1,18 @@
 """
 Custom autocomplete system for file paths without readline dependency.
 Handles spaces, square brackets, and other special characters seamlessly.
+Provides real-time suggestions, tab completion with common prefix detection,
+and clean screen management for optimal user experience.
+
+Key Features:
+- Real-time suggestions as you type (after 3+ chars with path separators)
+- Tab completion with intelligent common prefix detection
+- Case-insensitive path matching and directory detection
+- Handles complex file names with spaces, brackets, and special characters
+- Clean screen redraws prevent text wrapping artifacts
+- Arrow key navigation and proper cursor positioning
+- Escape key: exit if empty, clear if not empty
+- Backspace shows updated suggestions in real-time
 """
 
 import os
@@ -11,7 +23,14 @@ from utils import is_video_file, clear_screen
 
 
 class CustomAutocomplete:
-    """Custom autocomplete system for file paths."""
+    """
+    Custom autocomplete system for file paths with advanced features:
+    - Real-time suggestions as you type
+    - Tab completion with common prefix detection
+    - Handles spaces, brackets, and special characters
+    - Clean screen management and cursor navigation
+    - Case-insensitive path matching
+    """
     
     def __init__(self):
         self.suggestions = []
@@ -196,75 +215,12 @@ class CustomAutocomplete:
         
         sys.stdout.flush()
     
-    def get_terminal_width(self) -> int:
-        """Get terminal width, default to 80 if unable to determine"""
-        try:
-            import shutil
-            return shutil.get_terminal_size().columns
-        except:
-            return 80
-    
-    def calculate_lines_needed(self, text: str, terminal_width: int) -> int:
-        """Calculate how many terminal lines the text will occupy"""
-        if not text:
-            return 1
-        return (len(text) + terminal_width - 1) // terminal_width
-    
     def clear_screen_from_cursor(self):
         """Clear screen from current cursor position downward"""
         # Move cursor to beginning of line
         print('\r', end='')
         # Clear from cursor to end of screen
         print('\033[J', end='')
-        sys.stdout.flush()
-    
-    def redraw_input_line(self, prompt: str, input_text: str, cursor_pos: int):
-        """Redraw the input line with cursor at correct position, handling multi-line text"""
-        terminal_width = self.get_terminal_width()
-        full_line = prompt + input_text
-        
-        # Calculate how many lines the current text occupies
-        lines_occupied = self.calculate_lines_needed(full_line, terminal_width)
-        
-        # Move to beginning of current line
-        print('\r', end='')
-        
-        # Clear all lines that might contain our text
-        for i in range(lines_occupied):
-            if i > 0:
-                print('\033[K', end='')  # Clear current line
-                print('\033[B', end='')  # Move down one line
-            else:
-                print('\033[K', end='')  # Clear current line
-        
-        # Move back up to the original line
-        if lines_occupied > 1:
-            print(f'\033[{lines_occupied - 1}A', end='')
-        
-        # Move to beginning of line and redraw
-        print('\r', end='')
-        print(f'{prompt}{input_text}', end='')
-        
-        # Position cursor correctly
-        full_text_length = len(prompt + input_text)
-        desired_cursor_pos = len(prompt) + cursor_pos
-        
-        if desired_cursor_pos < full_text_length:
-            # Calculate how far back to move cursor
-            chars_to_move_back = full_text_length - desired_cursor_pos
-            
-            # Handle multi-line cursor positioning
-            if chars_to_move_back >= terminal_width:
-                lines_to_move_up = chars_to_move_back // terminal_width
-                chars_in_line = chars_to_move_back % terminal_width
-                
-                if lines_to_move_up > 0:
-                    print(f'\033[{lines_to_move_up}A', end='')
-                if chars_in_line > 0:
-                    print(f'\033[{chars_in_line}D', end='')
-            else:
-                print(f'\033[{chars_to_move_back}D', end='')
-        
         sys.stdout.flush()
     
     def find_common_prefix(self, paths: List[str]) -> str:
@@ -328,35 +284,6 @@ class CustomAutocomplete:
         
         return common_original
 
-    def handle_tab_completion(self, current_input: str) -> str:
-        """Handle tab completion and return completed text"""
-        suggestions = self.get_real_time_suggestions(current_input)
-        
-        if not suggestions:
-            return current_input
-        
-        if len(suggestions) == 1:
-            # Single match - complete it
-            completed_path = suggestions[0]
-            # If it's a directory and doesn't end with separator, add one
-            if os.path.isdir(completed_path) and not completed_path.endswith(os.sep):
-                completed_path += os.sep
-            return completed_path
-        else:
-            # Multiple matches - find common prefix
-            common_prefix = self.find_common_prefix(suggestions)
-            
-            # Only use the common prefix if it's longer than what the user has typed
-            if len(common_prefix) > len(current_input):
-                # If the common prefix represents a directory, add separator
-                if os.path.isdir(common_prefix) and not common_prefix.endswith(os.sep):
-                    common_prefix += os.sep
-                return common_prefix
-            
-            # If no useful common prefix, show suggestions
-            self.display_suggestions(suggestions)
-            return current_input
-    
     def get_input_with_autocomplete(self, prompt: str, title: str = "➕ Add New Movie", subtitle: str = "💡 Esc to exit if empty, or clear input if not empty") -> Optional[str]:
         """Main input function with real-time autocomplete"""
         from utils import clear_screen
@@ -383,22 +310,20 @@ class CustomAutocomplete:
             try:
                 char = msvcrt.getch()
                 
-                # Handle special keys
                 if char == b'\x08':  # Backspace
                     if self.cursor_position > 0:
                         # Remove character before cursor
                         self.input_buffer = self.input_buffer[:self.cursor_position-1] + self.input_buffer[self.cursor_position:]
                         self.cursor_position -= 1
                         
-                        # Always show suggestions after backspace for better UX and to fix wrapping issues
+                        # Show suggestions after backspace for better UX and to fix text wrapping issues
                         suggestions = self.get_real_time_suggestions(self.input_buffer)
-                        if suggestions and len(self.input_buffer) >= 2:
-                            # Show suggestions with full screen redraw (fixes wrapping)
+                        if suggestions and len(self.input_buffer) >= 2 and len(suggestions) <= 20:
                             max_to_show = min(len(suggestions), 8)
                             self.display_suggestions(suggestions, title, prompt, max_display=max_to_show)
                             last_suggestions_shown = True
                         else:
-                            # No suggestions or input too short, do clean redraw
+                            # No suggestions or input too short, clean redraw
                             clear_screen()
                             print(title)
                             print("=" * 30)
@@ -565,15 +490,14 @@ class CustomAutocomplete:
                         sys.stdout.flush()
                         last_suggestions_shown = False
                     else:
-                        # Just redraw the input line
-                        self.redraw_input_line(prompt, self.input_buffer, self.cursor_position)
+                        # Simple character echo for better performance
+                        print(char.decode('utf-8', errors='ignore'), end='')
+                        sys.stdout.flush()
                     
-                    # Show real-time suggestions as user types (but not too aggressively)
-                    if len(self.input_buffer) >= 3 and self.input_buffer.count(os.sep) > 0:  # Start suggesting after we have a path
+                    # Show real-time suggestions as user types
+                    if len(self.input_buffer) >= 3 and self.input_buffer.count(os.sep) > 0:
                         suggestions = self.get_real_time_suggestions(self.input_buffer)
-                        # Debug: Always show suggestions for testing (remove the count limit temporarily)
-                        if suggestions:
-                            # Limit display but allow more suggestions
+                        if suggestions and len(suggestions) <= 20:  # Reasonable limit for performance
                             max_to_show = min(len(suggestions), 8)
                             self.display_suggestions(suggestions, title, prompt, max_display=max_to_show)
                             last_suggestions_shown = True
