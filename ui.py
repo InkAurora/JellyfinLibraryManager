@@ -64,16 +64,97 @@ def windows_autocomplete_input(prompt: str) -> Optional[str]:
     cursor_pos = 0
     
     def redraw_line():
-        """Redraw the entire input line with cursor at correct position."""
-        # Clear the line
-        print('\r' + ' ' * (len(prompt) + len(current_input) + 20), end='')
+        """Redraw the entire screen with header and input line at correct cursor position."""
+        from utils import clear_screen
+        
+        # Clear the entire screen
+        clear_screen()
+        
+        # Redraw the movie addition header
+        print("➕ Add New Movie")
+        print("=" * 30)
+        print("💡 Use Tab for autocomplete, arrow keys to navigate suggestions")
+        print("💡 You can drag & drop a file or type the path manually")
+        print()
+        
         # Print prompt and input
-        print('\r' + prompt + current_input, end='')
+        print(prompt + current_input, end='')
         # Move cursor to correct position
         if cursor_pos < len(current_input):
             # Move cursor back to the correct position
             chars_to_move_back = len(current_input) - cursor_pos
             print('\b' * chars_to_move_back, end='')
+        print('', end='', flush=True)
+    
+    def clear_suggestions():
+        """Clear suggestions by redrawing the screen with just the header and input."""
+        from utils import clear_screen
+        
+        # Clear the entire screen
+        clear_screen()
+        
+        # Redraw the movie addition header
+        print("➕ Add New Movie")
+        print("=" * 30)
+        print("💡 Use Tab for autocomplete, arrow keys to navigate suggestions")
+        print("💡 You can drag & drop a file or type the path manually")
+        print()
+        
+        # Redraw the input line
+        print(prompt + current_input, end='')
+        # Position cursor correctly
+        if cursor_pos < len(current_input):
+            chars_to_move_back = len(current_input) - cursor_pos
+            print('\b' * chars_to_move_back, end='')
+        print('', end='', flush=True)
+    
+    def show_suggestions(candidates):
+        """Show suggestions by redrawing the entire screen with header."""
+        from utils import clear_screen
+        
+        # Clear the entire screen
+        clear_screen()
+        
+        # Redraw the movie addition header
+        print("➕ Add New Movie")
+        print("=" * 30)
+        print("💡 Use Tab for autocomplete, arrow keys to navigate suggestions")
+        print("💡 You can drag & drop a file or type the path manually")
+        print()
+        
+        # Show the input line with cursor positioned correctly
+        print(prompt + current_input, end='')
+        
+        # Show suggestions below
+        print()  # Move to next line for suggestions
+        print(f"📁 Found {len(candidates)} matches:")
+        for i, candidate in enumerate(candidates[:8]):  # Show first 8
+            # Clean up display - remove quotes and show just the filename
+            display_path = candidate
+            if display_path.startswith('"') and display_path.endswith('"'):
+                display_path = display_path[1:-1]
+            elif display_path.startswith('"'):
+                display_path = display_path[1:]
+            
+            display_name = os.path.basename(display_path)
+            if os.path.isdir(display_path):
+                print(f"  📁 {display_name}/")
+            else:
+                print(f"  📄 {display_name}")
+        
+        if len(candidates) > 8:
+            print(f"  ... and {len(candidates) - 8} more")
+        
+        # Move cursor back to the input line where it should be
+        # Calculate lines: suggestions + "Found X matches" line + blank line
+        lines_to_go_up = len(candidates[:8]) + 2  # +2 for "Found X matches" and blank line  
+        if len(candidates) > 8:
+            lines_to_go_up += 1  # +1 for "... and X more" line
+        
+        # Move cursor up to the input line
+        print(f'\033[{lines_to_go_up}A', end='')
+        # Move cursor to the correct position within the input
+        print(f'\033[{len(prompt) + cursor_pos}C', end='')
         print('', end='', flush=True)
     
     while True:
@@ -82,6 +163,7 @@ def windows_autocomplete_input(prompt: str) -> Optional[str]:
             char = msvcrt.getch()
             
             if char == b'\r':  # Enter
+                clear_suggestions()  # Clean up before returning
                 print()  # New line
                 result = current_input.strip()
                 if result.startswith('"') and result.endswith('"'):
@@ -91,6 +173,7 @@ def windows_autocomplete_input(prompt: str) -> Optional[str]:
                 if cursor_pos > 0:
                     current_input = current_input[:cursor_pos-1] + current_input[cursor_pos:]
                     cursor_pos -= 1
+                    clear_suggestions()  # Clear suggestions when input changes
                     redraw_line()
             elif char == b'\t':  # Tab - autocomplete
                 # Get completion candidates
@@ -120,6 +203,7 @@ def windows_autocomplete_input(prompt: str) -> Optional[str]:
                         
                         current_input = completion
                         cursor_pos = len(current_input)
+                        clear_suggestions()  # Clear any existing suggestions
                         redraw_line()
                     else:
                         # Multiple matches - find common prefix
@@ -154,32 +238,11 @@ def windows_autocomplete_input(prompt: str) -> Optional[str]:
                             else:
                                 current_input = common
                             cursor_pos = len(current_input)
+                            clear_suggestions()  # Clear any existing suggestions
                             redraw_line()
                         else:
-                            # Show matches
-                            print()
-                            print(f"📁 Found {len(candidates)} matches:")
-                            for i, candidate in enumerate(candidates[:8]):  # Show first 8
-                                # Clean up display - remove quotes and show just the filename
-                                display_path = candidate
-                                if display_path.startswith('"') and display_path.endswith('"'):
-                                    display_path = display_path[1:-1]
-                                elif display_path.startswith('"'):
-                                    display_path = display_path[1:]
-                                
-                                display_name = os.path.basename(display_path)
-                                if os.path.isdir(display_path):
-                                    print(f"  📁 {display_name}/")
-                                else:
-                                    print(f"  📄 {display_name}")
-                            if len(candidates) > 8:
-                                print(f"  ... and {len(candidates) - 8} more")
-                            print(prompt + current_input, end='')
-                            # Reset cursor position
-                            if cursor_pos < len(current_input):
-                                chars_to_move_back = len(current_input) - cursor_pos
-                                print('\b' * chars_to_move_back, end='')
-                            print('', end='', flush=True)
+                            # Show matches using the new suggestion system
+                            show_suggestions(candidates)
                 else:
                     # No matches - try to show directory contents
                     if current_input:
@@ -196,14 +259,24 @@ def windows_autocomplete_input(prompt: str) -> Optional[str]:
                                             items.append(f"📄 {item}")
                                 
                                 if items:
+                                    # Clear previous suggestions
+                                    clear_suggestions()
+                                    
                                     print()
                                     print(f"💡 Matches in '{base_path}':")
+                                    lines_printed = 1
                                     for item in items[:6]:
                                         print(f"  {item}")
+                                        lines_printed += 1
                                     if len(items) > 6:
                                         print(f"  ... and {len(items) - 6} more")
-                                    print(prompt + current_input, end='')
-                                    # Reset cursor position
+                                        lines_printed += 1
+                                    
+                                    last_suggestions_lines = lines_printed
+                                    
+                                    # Move cursor back to input line
+                                    print('\033[{}A'.format(lines_printed), end='')
+                                    print('\r' + prompt + current_input, end='')
                                     if cursor_pos < len(current_input):
                                         chars_to_move_back = len(current_input) - cursor_pos
                                         print('\b' * chars_to_move_back, end='')
@@ -211,6 +284,7 @@ def windows_autocomplete_input(prompt: str) -> Optional[str]:
                             except (OSError, PermissionError):
                                 pass
             elif char == b'\x1b':  # Escape
+                clear_suggestions()  # Clean up before returning
                 print()
                 return None
             elif char == b'\xe0':  # Extended key prefix (arrow keys, function keys, etc.)
@@ -240,11 +314,13 @@ def windows_autocomplete_input(prompt: str) -> Optional[str]:
                         # Insert character at cursor position
                         current_input = current_input[:cursor_pos] + char_str + current_input[cursor_pos:]
                         cursor_pos += 1
+                        clear_suggestions()  # Clear suggestions when input changes
                         redraw_line()
                 except UnicodeDecodeError:
                     continue
                     
         except (EOFError, KeyboardInterrupt):
+            clear_suggestions()  # Clean up before returning
             print()
             return None
 
