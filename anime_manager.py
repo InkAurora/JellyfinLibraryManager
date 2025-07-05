@@ -141,7 +141,7 @@ class AnimeManager:
         print("💡 You can drag & drop a folder or type the path manually")
         print()
         
-        anime_folder_path = self.menu_system.get_user_input("Enter the path to the anime episodes folder: ")
+        anime_folder_path = self.menu_system.get_user_input("Enter the path to the anime episodes folder: ", use_autocomplete=True)
         if not anime_folder_path:
             return
         
@@ -442,7 +442,7 @@ class AnimeManager:
         if autocomplete_enabled:
             print("💡 Use Tab for autocomplete when typing paths")
         
-        download_path = self.menu_system.get_user_input("Enter download path (or leave empty for default): ")
+        download_path = self.menu_system.get_user_input("Enter download path (or leave empty for default): ", use_autocomplete=True)
         if not download_path:
             return None
         

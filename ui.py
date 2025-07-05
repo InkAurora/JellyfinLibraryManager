@@ -4,9 +4,10 @@ User interface and menu system for the Jellyfin Library Manager.
 
 import os
 import msvcrt
+import sys
 from typing import List, Optional
 from config import APP_TITLE
-from utils import clear_screen, wait_for_enter
+from utils import clear_screen, wait_for_enter, is_video_file
 from file_utils import path_completer
 
 # Import readline with Windows compatibility
@@ -20,6 +21,143 @@ except ImportError:
             import pyreadline as readline
         except ImportError:
             readline = None
+
+
+def show_directory_hint(current_path: str) -> None:
+    """Show a helpful directory listing hint for the current path."""
+    try:
+        if not current_path:
+            base_path = os.getcwd()
+        elif current_path.endswith(os.sep):
+            base_path = current_path
+        else:
+            base_path = os.path.dirname(current_path) if os.sep in current_path else os.getcwd()
+        
+        if os.path.isdir(base_path):
+            items = []
+            try:
+                for item in os.listdir(base_path):
+                    item_path = os.path.join(base_path, item)
+                    if os.path.isdir(item_path):
+                        items.append(f"📁 {item}/")
+                    elif is_video_file(item):
+                        items.append(f"🎬 {item}")
+                
+                if items:
+                    print(f"\n💡 Available in '{base_path}':")
+                    for item in items[:10]:  # Show first 10 items
+                        print(f"   {item}")
+                    if len(items) > 10:
+                        print(f"   ... and {len(items) - 10} more items")
+                    print()
+            except (OSError, PermissionError):
+                pass
+    except Exception:
+        pass
+
+
+def windows_autocomplete_input(prompt: str) -> Optional[str]:
+    """Custom input function with better Windows autocomplete support."""
+    print(prompt, end='', flush=True)
+    
+    current_input = ""
+    
+    while True:
+        try:
+            # Get a single character
+            char = msvcrt.getch()
+            
+            if char == b'\r':  # Enter
+                print()  # New line
+                result = current_input.strip()
+                if result.startswith('"') and result.endswith('"'):
+                    result = result[1:-1]
+                return result if result else ""
+            elif char == b'\x08':  # Backspace
+                if len(current_input) > 0:
+                    current_input = current_input[:-1]
+                    # Clear line and reprint
+                    print('\r' + ' ' * (len(prompt) + len(current_input) + 20), end='')
+                    print('\r' + prompt + current_input, end='', flush=True)
+            elif char == b'\t':  # Tab - autocomplete
+                # Get completion candidates
+                candidates = []
+                state = 0
+                while True:
+                    candidate = path_completer(current_input, state)
+                    if candidate is None:
+                        break
+                    candidates.append(candidate)
+                    state += 1
+                
+                if candidates:
+                    if len(candidates) == 1:
+                        # Single match - complete it
+                        current_input = candidates[0]
+                        # Clear line and reprint
+                        print('\r' + ' ' * (len(prompt) + 100), end='')
+                        print('\r' + prompt + current_input, end='', flush=True)
+                    else:
+                        # Multiple matches - find common prefix
+                        common = os.path.commonprefix(candidates)
+                        if len(common) > len(current_input):
+                            current_input = common
+                            print('\r' + ' ' * (len(prompt) + 100), end='')
+                            print('\r' + prompt + current_input, end='', flush=True)
+                        else:
+                            # Show matches
+                            print()
+                            print(f"📁 Found {len(candidates)} matches:")
+                            for i, candidate in enumerate(candidates[:8]):  # Show first 8
+                                display_name = os.path.basename(candidate.strip('"'))
+                                if os.path.isdir(candidate.strip('"')):
+                                    print(f"  📁 {display_name}/")
+                                else:
+                                    print(f"  📄 {display_name}")
+                            if len(candidates) > 8:
+                                print(f"  ... and {len(candidates) - 8} more")
+                            print(prompt + current_input, end='', flush=True)
+                else:
+                    # No matches - try to show directory contents
+                    if current_input:
+                        base_path = os.path.dirname(current_input) if os.path.dirname(current_input) else "."
+                        if os.path.exists(base_path):
+                            try:
+                                items = []
+                                for item in os.listdir(base_path):
+                                    if item.lower().startswith(os.path.basename(current_input).lower()):
+                                        full_path = os.path.join(base_path, item)
+                                        if os.path.isdir(full_path):
+                                            items.append(f"📁 {item}/")
+                                        else:
+                                            items.append(f"📄 {item}")
+                                
+                                if items:
+                                    print()
+                                    print(f"💡 Matches in '{base_path}':")
+                                    for item in items[:6]:
+                                        print(f"  {item}")
+                                    if len(items) > 6:
+                                        print(f"  ... and {len(items) - 6} more")
+                                    print(prompt + current_input, end='', flush=True)
+                            except (OSError, PermissionError):
+                                pass
+            elif char == b'\x1b':  # Escape
+                print()
+                return None
+            else:
+                # Regular character
+                try:
+                    char_str = char.decode('utf-8')
+                    if ord(char_str) >= 32:  # Printable character
+                        current_input += char_str
+                        print(char_str, end='', flush=True)
+                except UnicodeDecodeError:
+                    continue
+                    
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
 
 
 class MenuSystem:
@@ -72,21 +210,36 @@ class MenuSystem:
         
         try:
             readline.set_completer(path_completer)
+            # Configure tab completion
             readline.parse_and_bind("tab: complete")
+            # Set completion display matches hook to show partial completions
+            readline.parse_and_bind("set show-all-if-ambiguous on")
+            readline.parse_and_bind("set completion-ignore-case on")
             # Set word delimiters (exclude spaces to handle paths with spaces)
-            # Only use tab and newline as delimiters
             readline.set_completer_delims('\t\n')
+            # Enable automatic quote insertion for paths with spaces
+            readline.parse_and_bind("set completion-query-items 50")
+            # Configure the completion behavior
+            if hasattr(readline, 'set_completion_display_matches_hook'):
+                readline.set_completion_display_matches_hook(None)
             return True
         except Exception:
             return False
     
     @staticmethod
-    def get_user_input(prompt: str, strip_quotes: bool = True) -> Optional[str]:
-        """Get user input with error handling."""
+    def get_user_input(prompt: str, strip_quotes: bool = True, use_autocomplete: bool = False) -> Optional[str]:
+        """Get user input with error handling and optional autocomplete."""
         try:
-            user_input = input(prompt).strip()
-            if strip_quotes:
-                user_input = user_input.strip('"')
+            if use_autocomplete and os.name == 'nt':
+                # Use custom Windows autocomplete
+                user_input = windows_autocomplete_input(prompt)
+                if user_input is None:
+                    return None
+            else:
+                # Standard input
+                user_input = input(prompt).strip()
+                if strip_quotes:
+                    user_input = user_input.strip('"')
             return user_input
         except (EOFError, KeyboardInterrupt):
             from utils import handle_input_cancellation

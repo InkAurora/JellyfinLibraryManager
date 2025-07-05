@@ -250,74 +250,117 @@ def remove_symlink_safely(path: str) -> bool:
         return False
 
 
-# Path completion for readline
+# Global variable to store matches for readline
+_completion_matches = []
+
+def find_common_prefix(matches: List[str]) -> str:
+    """Find the common prefix among a list of matches."""
+    if not matches:
+        return ""
+    if len(matches) == 1:
+        return matches[0]
+    
+    # Find common prefix
+    prefix = matches[0]
+    for match in matches[1:]:
+        # Find where they differ
+        i = 0
+        while i < min(len(prefix), len(match)) and prefix[i].lower() == match[i].lower():
+            i += 1
+        prefix = prefix[:i]
+    
+    return prefix
+
 def path_completer(text: str, state: int) -> Optional[str]:
     """Path completion function for readline."""
+    global _completion_matches
+    
     try:
-        # Handle different path formats
-        original_text = text
-        add_quote = False
-        
-        if text.startswith('"'):
-            # Remove leading quote for processing
-            text = text[1:]
-            add_quote = True
-        
-        # Expand user directory (~)
-        text = os.path.expanduser(text)
-        
-        # Normalize path separators for Windows
-        text = text.replace('/', os.sep)
-        
-        # If text is empty, start from current directory
-        if not text:
-            pattern = '*'
-        # If text is just a drive letter, add separator
-        elif len(text) == 2 and text[1] == ':':
-            pattern = text + os.sep + '*'
-        # If text ends with separator, look for contents of that directory
-        elif text.endswith(os.sep):
-            pattern = text + '*'
-        else:
-            # Look for files/folders that start with the given text
-            pattern = text + '*'
-        
-        # Get matches using glob
-        try:
-            matches = glob.glob(pattern)
-        except Exception:
-            matches = []
-        
-        # Filter and format matches
-        filtered_matches = []
-        for match in matches:
-            # Convert to absolute path
-            match = os.path.abspath(match)
+        # On first call (state == 0), generate all matches
+        if state == 0:
+            _completion_matches = []
             
-            if os.path.isdir(match):
-                # Add separator for directories and ensure it's properly formatted
-                if not match.endswith(os.sep):
-                    match += os.sep
-                filtered_matches.append(match)
-            elif is_video_file(match):
-                # Include video files only
-                filtered_matches.append(match)
-        
-        # Sort matches (directories first, then files)
-        filtered_matches.sort(key=lambda x: (not x.endswith(os.sep), x.lower()))
-        
-        # Add quotes back if the original text had them
-        if add_quote:
-            filtered_matches = ['"' + match + '"' if not match.startswith('"') else match 
-                              for match in filtered_matches]
-        else:
-            # Auto-quote paths with spaces for easier input
-            filtered_matches = ['"' + match + '"' if ' ' in match else match 
-                              for match in filtered_matches]
+            # Handle different path formats
+            original_text = text
+            add_quote = False
+            
+            if text.startswith('"'):
+                # Remove leading quote for processing
+                text = text[1:]
+                add_quote = True
+            
+            # Expand user directory (~)
+            text = os.path.expanduser(text)
+            
+            # Normalize path separators for Windows
+            text = text.replace('/', os.sep)
+            
+            # If text is empty, start from current directory
+            if not text:
+                pattern = '*'
+            # If text is just a drive letter, add separator
+            elif len(text) == 2 and text[1] == ':':
+                pattern = text + os.sep + '*'
+            # If text ends with separator, look for contents of that directory
+            elif text.endswith(os.sep):
+                pattern = text + '*'
+            else:
+                # Look for files/folders that start with the given text
+                pattern = text + '*'
+            
+            # Get matches using glob
+            try:
+                matches = glob.glob(pattern)
+            except Exception:
+                matches = []
+            
+            # Filter and format matches
+            raw_matches = []
+            for match in matches:
+                # Convert to absolute path
+                match = os.path.abspath(match)
+                
+                if os.path.isdir(match):
+                    # Add separator for directories and ensure it's properly formatted
+                    if not match.endswith(os.sep):
+                        match += os.sep
+                    raw_matches.append(match)
+                elif is_video_file(match):
+                    # Include video files only
+                    raw_matches.append(match)
+            
+            # Sort matches (directories first, then files)
+            raw_matches.sort(key=lambda x: (not x.endswith(os.sep), x.lower()))
+            
+            # If there are multiple matches, try to complete to common prefix first
+            if len(raw_matches) > 1:
+                common_prefix = find_common_prefix(raw_matches)
+                # Only use common prefix if it's longer than what user typed
+                if len(common_prefix) > len(text):
+                    if add_quote or ' ' in common_prefix:
+                        if not common_prefix.startswith('"'):
+                            common_prefix = '"' + common_prefix
+                        if not common_prefix.endswith('"') and not common_prefix.endswith(os.sep):
+                            common_prefix = common_prefix + '"'
+                    _completion_matches = [common_prefix]
+                else:
+                    # Add quotes back if the original text had them or if paths contain spaces
+                    for match in raw_matches:
+                        if add_quote or ' ' in match:
+                            if not match.startswith('"'):
+                                match = '"' + match + '"'
+                        _completion_matches.append(match)
+            else:
+                # Single match or no matches
+                for match in raw_matches:
+                    if add_quote or ' ' in match:
+                        if not match.startswith('"'):
+                            match = '"' + match + '"'
+                    _completion_matches.append(match)
         
         # Return the match for the current state
-        if state < len(filtered_matches):
-            return filtered_matches[state]
+        if state < len(_completion_matches):
+            return _completion_matches[state]
         else:
             return None
             

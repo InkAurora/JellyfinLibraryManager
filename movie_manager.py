@@ -57,7 +57,7 @@ class MovieManager:
         print("💡 You can drag & drop a file or type the path manually")
         print()
         
-        movie_path = self.menu_system.get_user_input("Enter the path to the movie file: ")
+        movie_path = self.menu_system.get_user_input("Enter the path to the movie file: ", use_autocomplete=True)
         if not movie_path:
             return
         
