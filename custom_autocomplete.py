@@ -56,7 +56,7 @@ class CustomAutocomplete:
                 for item in os.listdir(base_dir):
                     item_path = os.path.join(base_dir, item)
                     if os.path.isdir(item_path):
-                        all_items.append(f"{item}{os.sep}")  # Mark directories with separator
+                        all_items.append(item)  # Don't add separator here, we'll add it in the full path
                     elif is_video_file(item):
                         all_items.append(item)
             except PermissionError:
@@ -69,17 +69,18 @@ class CustomAutocomplete:
             else:
                 matches = all_items
             
-            # Return full paths for absolute paths, relative for relative
-            if os.path.isabs(partial_path):
-                full_matches = []
-                for match in matches:
-                    full_path = os.path.join(base_dir, match)
-                    # Normalize path separators
-                    full_path = os.path.normpath(full_path)
-                    full_matches.append(full_path)
-                return full_matches
-            else:
-                return [os.path.normpath(os.path.join(base_dir, match)) for match in matches]
+            # Return full paths
+            full_matches = []
+            for match in matches:
+                full_path = os.path.join(base_dir, match)
+                # Normalize path separators
+                full_path = os.path.normpath(full_path)
+                # Add separator for directories
+                if os.path.isdir(full_path):
+                    full_path += os.sep
+                full_matches.append(full_path)
+            
+            return sorted(full_matches)  # Sort for consistent ordering
                 
         except Exception:
             return []
@@ -161,6 +162,67 @@ class CustomAutocomplete:
         
         sys.stdout.flush()
     
+    def find_common_prefix(self, paths: List[str]) -> str:
+        """Find the longest common prefix among a list of paths"""
+        if not paths:
+            return ""
+        if len(paths) == 1:
+            return paths[0]
+        
+        # Normalize all paths first (handle different path separators, case sensitivity)
+        normalized_paths = []
+        for path in paths:
+            # Normalize path separators and case for Windows
+            normalized = os.path.normpath(path).lower()
+            normalized_paths.append((normalized, path))
+        
+        # Start with the first path
+        common_normalized = normalized_paths[0][0]
+        common_original = normalized_paths[0][1]
+        
+        # Compare with each subsequent path
+        for normalized, original in normalized_paths[1:]:
+            # Find common characters from the beginning
+            new_common_normalized = ""
+            new_common_original = ""
+            min_length = min(len(common_normalized), len(normalized))
+            
+            for i in range(min_length):
+                if common_normalized[i] == normalized[i]:
+                    new_common_normalized += common_normalized[i]
+                    new_common_original += common_original[i]
+                else:
+                    break
+            
+            common_normalized = new_common_normalized
+            common_original = new_common_original
+            
+            # If we have no common prefix, stop
+            if not common_normalized:
+                break
+        
+        # Ensure we don't cut off in the middle of a filename/directory name
+        # Find the last path separator to avoid partial names
+        if common_original and not common_original.endswith(os.sep):
+            last_sep = common_original.rfind(os.sep)
+            if last_sep > 0:  # Don't cut off drive letters on Windows (C:\)
+                # Check if there are characters after the last separator
+                partial_name = common_original[last_sep + 1:]
+                if partial_name:
+                    # Only keep the partial name if all paths start with it
+                    all_match_partial = True
+                    for path in paths:
+                        path_after_sep = path[last_sep + 1:] if len(path) > last_sep else ""
+                        if not path_after_sep.lower().startswith(partial_name.lower()):
+                            all_match_partial = False
+                            break
+                    
+                    if not all_match_partial:
+                        # Cut off the partial name, keep up to the separator
+                        common_original = common_original[:last_sep + 1]
+        
+        return common_original
+
     def handle_tab_completion(self, current_input: str) -> str:
         """Handle tab completion and return completed text"""
         suggestions = self.get_real_time_suggestions(current_input)
@@ -177,27 +239,16 @@ class CustomAutocomplete:
             return completed_path
         else:
             # Multiple matches - find common prefix
-            if suggestions:
-                # Find the longest common prefix
-                common_prefix = suggestions[0]
-                for suggestion in suggestions[1:]:
-                    # Find common prefix between current common_prefix and this suggestion
-                    new_prefix = ""
-                    for i, (c1, c2) in enumerate(zip(common_prefix, suggestion)):
-                        if c1.lower() == c2.lower():
-                            new_prefix += c1
-                        else:
-                            break
-                    common_prefix = new_prefix
-                
-                # If we found a longer common prefix, use it
-                if len(common_prefix) > len(current_input):
-                    # If the common prefix is a directory, add separator
-                    if os.path.isdir(common_prefix) and not common_prefix.endswith(os.sep):
-                        common_prefix += os.sep
-                    return common_prefix
+            common_prefix = self.find_common_prefix(suggestions)
             
-            # Show suggestions
+            # Only use the common prefix if it's longer than what the user has typed
+            if len(common_prefix) > len(current_input):
+                # If the common prefix represents a directory, add separator
+                if os.path.isdir(common_prefix) and not common_prefix.endswith(os.sep):
+                    common_prefix += os.sep
+                return common_prefix
+            
+            # If no useful common prefix, show suggestions
             self.display_suggestions(suggestions)
             return current_input
     
@@ -272,9 +323,33 @@ class CustomAutocomplete:
                             sys.stdout.flush()
                             last_suggestions_shown = False
                         else:
-                            # Multiple matches - display_suggestions handles the screen redraw
-                            self.display_suggestions(suggestions, title, prompt)
-                            last_suggestions_shown = True
+                            # Multiple matches - find common prefix
+                            common_prefix = self.find_common_prefix(suggestions)
+                            
+                            # Only use the common prefix if it's longer than what the user has typed
+                            if len(common_prefix) > len(self.input_buffer):
+                                # If the common prefix represents a directory, add separator
+                                if os.path.isdir(common_prefix) and not common_prefix.endswith(os.sep):
+                                    common_prefix += os.sep
+                                
+                                self.input_buffer = common_prefix
+                                self.cursor_position = len(self.input_buffer)
+                                
+                                # Redraw with full screen to clear suggestions
+                                clear_screen()
+                                print(title)
+                                print("=" * 30)
+                                print("💡 Use Tab for autocomplete, arrow keys to navigate")
+                                print("💡 Type file path - supports spaces and special characters!")
+                                print(subtitle)
+                                print()
+                                print(f"{prompt}{self.input_buffer}", end='')
+                                sys.stdout.flush()
+                                last_suggestions_shown = False
+                            else:
+                                # No useful common prefix - show suggestions
+                                self.display_suggestions(suggestions, title, prompt)
+                                last_suggestions_shown = True
                 
                 elif char == b'\xe0':  # Extended key (arrows, etc.)
                     extended_char = msvcrt.getch()
