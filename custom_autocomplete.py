@@ -140,6 +140,20 @@ class CustomAutocomplete:
         
         sys.stdout.flush()
     
+    def get_terminal_width(self) -> int:
+        """Get terminal width, default to 80 if unable to determine"""
+        try:
+            import shutil
+            return shutil.get_terminal_size().columns
+        except:
+            return 80
+    
+    def calculate_lines_needed(self, text: str, terminal_width: int) -> int:
+        """Calculate how many terminal lines the text will occupy"""
+        if not text:
+            return 1
+        return (len(text) + terminal_width - 1) // terminal_width
+    
     def clear_screen_from_cursor(self):
         """Clear screen from current cursor position downward"""
         # Move cursor to beginning of line
@@ -149,16 +163,51 @@ class CustomAutocomplete:
         sys.stdout.flush()
     
     def redraw_input_line(self, prompt: str, input_text: str, cursor_pos: int):
-        """Redraw the input line with cursor at correct position"""
-        # Clear the entire line first
-        print('\r' + ' ' * 120, end='')  # Clear line with spaces
-        # Redraw the line
-        print(f'\r{prompt}{input_text}', end='')
+        """Redraw the input line with cursor at correct position, handling multi-line text"""
+        terminal_width = self.get_terminal_width()
+        full_line = prompt + input_text
         
-        # Move cursor to correct position
-        if cursor_pos < len(input_text):
-            move_back = len(input_text) - cursor_pos
-            print(f'\033[{move_back}D', end='')
+        # Calculate how many lines the current text occupies
+        lines_occupied = self.calculate_lines_needed(full_line, terminal_width)
+        
+        # Move to beginning of current line
+        print('\r', end='')
+        
+        # Clear all lines that might contain our text
+        for i in range(lines_occupied):
+            if i > 0:
+                print('\033[K', end='')  # Clear current line
+                print('\033[B', end='')  # Move down one line
+            else:
+                print('\033[K', end='')  # Clear current line
+        
+        # Move back up to the original line
+        if lines_occupied > 1:
+            print(f'\033[{lines_occupied - 1}A', end='')
+        
+        # Move to beginning of line and redraw
+        print('\r', end='')
+        print(f'{prompt}{input_text}', end='')
+        
+        # Position cursor correctly
+        full_text_length = len(prompt + input_text)
+        desired_cursor_pos = len(prompt) + cursor_pos
+        
+        if desired_cursor_pos < full_text_length:
+            # Calculate how far back to move cursor
+            chars_to_move_back = full_text_length - desired_cursor_pos
+            
+            # Handle multi-line cursor positioning
+            if chars_to_move_back >= terminal_width:
+                lines_to_move_up = chars_to_move_back // terminal_width
+                chars_in_line = chars_to_move_back % terminal_width
+                
+                if lines_to_move_up > 0:
+                    print(f'\033[{lines_to_move_up}A', end='')
+                if chars_in_line > 0:
+                    print(f'\033[{chars_in_line}D', end='')
+            else:
+                print(f'\033[{chars_to_move_back}D', end='')
         
         sys.stdout.flush()
     
@@ -285,12 +334,28 @@ class CustomAutocomplete:
                         self.input_buffer = self.input_buffer[:self.cursor_position-1] + self.input_buffer[self.cursor_position:]
                         self.cursor_position -= 1
                         
-                        # Clear suggestions area if shown
-                        if last_suggestions_shown:
-                            self.clear_screen_from_cursor()
+                        # Always show suggestions after backspace for better UX and to fix wrapping issues
+                        suggestions = self.get_real_time_suggestions(self.input_buffer)
+                        if suggestions and len(suggestions) <= 10 and len(self.input_buffer) >= 2:
+                            # Show suggestions with full screen redraw (fixes wrapping)
+                            self.display_suggestions(suggestions, title, prompt, max_display=6)
+                            last_suggestions_shown = True
+                        else:
+                            # No suggestions or input too short, do clean redraw
+                            clear_screen()
+                            print(title)
+                            print("=" * 30)
+                            print("💡 Use Tab for autocomplete, arrow keys to navigate")
+                            print("💡 Type file path - supports spaces and special characters!")
+                            print(subtitle)
+                            print()
+                            print(f"{prompt}{self.input_buffer}", end='')
+                            # Position cursor correctly
+                            if self.cursor_position < len(self.input_buffer):
+                                chars_to_move_back = len(self.input_buffer) - self.cursor_position
+                                print(f'\033[{chars_to_move_back}D', end='')
+                            sys.stdout.flush()
                             last_suggestions_shown = False
-                        
-                        self.redraw_input_line(prompt, self.input_buffer, self.cursor_position)
                 
                 elif char == b'\r':  # Enter
                     print()  # New line after input
@@ -389,10 +454,18 @@ class CustomAutocomplete:
                         # If input has content, clear it
                         self.input_buffer = ""
                         self.cursor_position = 0
-                        if last_suggestions_shown:
-                            self.clear_screen_from_cursor()
-                            last_suggestions_shown = False
-                        self.redraw_input_line(prompt, self.input_buffer, self.cursor_position)
+                        
+                        # Do a full screen redraw for clean display
+                        clear_screen()
+                        print(title)
+                        print("=" * 30)
+                        print("💡 Use Tab for autocomplete, arrow keys to navigate")
+                        print("💡 Type file path - supports spaces and special characters!")
+                        print(subtitle)
+                        print()
+                        print(f"{prompt}", end='')
+                        sys.stdout.flush()
+                        last_suggestions_shown = False
                 
                 elif char >= b' ' and char <= b'~':  # Printable ASCII
                     # Insert character at cursor position
@@ -400,12 +473,27 @@ class CustomAutocomplete:
                     self.input_buffer = self.input_buffer[:self.cursor_position] + char_str + self.input_buffer[self.cursor_position:]
                     self.cursor_position += 1
                     
-                    # Clear suggestions if shown
+                    # If suggestions were shown, do a full screen redraw
                     if last_suggestions_shown:
-                        self.clear_screen_from_cursor()
+                        clear_screen()
+                        print(title)
+                        print("=" * 30)
+                        print("💡 Use Tab for autocomplete, arrow keys to navigate")
+                        print("💡 Type file path - supports spaces and special characters!")
+                        print(subtitle)
+                        print()
+                        print(f"{prompt}{self.input_buffer}", end='')
+                        
+                        # Position cursor correctly
+                        if self.cursor_position < len(self.input_buffer):
+                            chars_to_move_back = len(self.input_buffer) - self.cursor_position
+                            print(f'\033[{chars_to_move_back}D', end='')
+                        
+                        sys.stdout.flush()
                         last_suggestions_shown = False
-                    
-                    self.redraw_input_line(prompt, self.input_buffer, self.cursor_position)
+                    else:
+                        # Just redraw the input line
+                        self.redraw_input_line(prompt, self.input_buffer, self.cursor_position)
                     
                     # Show real-time suggestions as user types (but not too aggressively)
                     if len(self.input_buffer) >= 3 and self.input_buffer.count(os.sep) > 0:  # Start suggesting after we have a path
