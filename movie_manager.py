@@ -9,6 +9,7 @@ from config import Colors
 from utils import clear_screen, wait_for_enter, get_media_folder, validate_video_file
 from ui import MenuSystem
 from file_utils import find_existing_symlink, list_movies, create_movie_symlink, remove_symlink_safely
+from custom_autocomplete import get_movie_file_with_custom_autocomplete
 
 
 class MovieManager:
@@ -45,21 +46,16 @@ class MovieManager:
     
     def add_movie(self) -> None:
         """Add a new movie to the library."""
-        clear_screen()
-        print("\n➕ Add New Movie")
-        print("=" * 30)
+        # Use the new custom autocomplete system
+        movie_path = get_movie_file_with_custom_autocomplete()
         
-        # Setup autocomplete
-        autocomplete_enabled = self.menu_system.setup_autocomplete()
-        
-        if autocomplete_enabled:
-            print("💡 Use Tab for autocomplete, arrow keys to navigate suggestions")
-        print("💡 You can drag & drop a file or type the path manually")
-        print()
-        
-        movie_path = self.menu_system.get_user_input("Enter the path to the movie file: ", use_autocomplete=True)
-        if not movie_path:
+        if not movie_path or not movie_path.strip():
+            print("❌ No file path provided.")
+            wait_for_enter()
             return
+        
+        # Clean up the path (no quotes needed with custom system)
+        movie_path = movie_path.strip()
         
         if not validate_video_file(movie_path):
             wait_for_enter()

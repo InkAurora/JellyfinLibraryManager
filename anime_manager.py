@@ -14,6 +14,7 @@ from anilist_api import interactive_anilist_search
 from nyaa_api import nyaa_rss_search, navigate_nyaa_results, show_torrent_file_tree
 from qbittorrent_api import qb_check_connection, qb_login, qb_add_torrent
 from database import add_torrent_to_database
+from custom_autocomplete import get_anime_folder_with_custom_autocomplete, get_download_path_with_custom_autocomplete
 
 
 class AnimeManager:
@@ -133,20 +134,20 @@ class AnimeManager:
             import time
             time.sleep(1)
 
-        # Setup autocomplete
-        autocomplete_enabled = self.menu_system.setup_autocomplete()
+        # Use custom autocomplete for folder path
+        anime_folder_path = get_anime_folder_with_custom_autocomplete()
         
-        if autocomplete_enabled:
-            print("💡 Use Tab for autocomplete when typing paths")
-        print("💡 You can drag & drop a folder or type the path manually")
-        print()
-        
-        anime_folder_path = self.menu_system.get_user_input("Enter the path to the anime episodes folder: ", use_autocomplete=True)
-        if not anime_folder_path:
+        if not anime_folder_path or not anime_folder_path.strip():
+            print("❌ No folder path provided.")
+            wait_for_enter()
             return
+        
+        # Clean up the path
+        anime_folder_path = anime_folder_path.strip()
         
         if not validate_directory(anime_folder_path):
             wait_for_enter()
+            return
             return
         
         # Convert to absolute path for processing
@@ -433,18 +434,14 @@ class AnimeManager:
     
     def _get_custom_download_path(self) -> str:
         """Get custom download path from user."""
-        clear_screen()
-        print("📂 Custom Download Path")
-        print("=" * 30)
+        # Use custom autocomplete for download path
+        download_path = get_download_path_with_custom_autocomplete()
         
-        # Setup autocomplete for path input
-        autocomplete_enabled = self.menu_system.setup_autocomplete()
-        if autocomplete_enabled:
-            print("💡 Use Tab for autocomplete when typing paths")
-        
-        download_path = self.menu_system.get_user_input("Enter download path (or leave empty for default): ", use_autocomplete=True)
-        if not download_path:
+        if not download_path or not download_path.strip():
             return None
+        
+        # Clean up the path
+        download_path = download_path.strip()
         
         if not os.path.isdir(download_path):
             print(f"⚠️  Directory '{download_path}' does not exist.")
