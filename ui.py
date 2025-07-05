@@ -61,6 +61,20 @@ def windows_autocomplete_input(prompt: str) -> Optional[str]:
     print(prompt, end='', flush=True)
     
     current_input = ""
+    cursor_pos = 0
+    
+    def redraw_line():
+        """Redraw the entire input line with cursor at correct position."""
+        # Clear the line
+        print('\r' + ' ' * (len(prompt) + len(current_input) + 20), end='')
+        # Print prompt and input
+        print('\r' + prompt + current_input, end='')
+        # Move cursor to correct position
+        if cursor_pos < len(current_input):
+            # Move cursor back to the correct position
+            chars_to_move_back = len(current_input) - cursor_pos
+            print('\b' * chars_to_move_back, end='')
+        print('', end='', flush=True)
     
     while True:
         try:
@@ -74,11 +88,10 @@ def windows_autocomplete_input(prompt: str) -> Optional[str]:
                     result = result[1:-1]
                 return result if result else ""
             elif char == b'\x08':  # Backspace
-                if len(current_input) > 0:
-                    current_input = current_input[:-1]
-                    # Clear line and reprint
-                    print('\r' + ' ' * (len(prompt) + len(current_input) + 20), end='')
-                    print('\r' + prompt + current_input, end='', flush=True)
+                if cursor_pos > 0:
+                    current_input = current_input[:cursor_pos-1] + current_input[cursor_pos:]
+                    cursor_pos -= 1
+                    redraw_line()
             elif char == b'\t':  # Tab - autocomplete
                 # Get completion candidates
                 candidates = []
@@ -94,16 +107,15 @@ def windows_autocomplete_input(prompt: str) -> Optional[str]:
                     if len(candidates) == 1:
                         # Single match - complete it
                         current_input = candidates[0]
-                        # Clear line and reprint
-                        print('\r' + ' ' * (len(prompt) + 100), end='')
-                        print('\r' + prompt + current_input, end='', flush=True)
+                        cursor_pos = len(current_input)
+                        redraw_line()
                     else:
                         # Multiple matches - find common prefix
                         common = os.path.commonprefix(candidates)
                         if len(common) > len(current_input):
                             current_input = common
-                            print('\r' + ' ' * (len(prompt) + 100), end='')
-                            print('\r' + prompt + current_input, end='', flush=True)
+                            cursor_pos = len(current_input)
+                            redraw_line()
                         else:
                             # Show matches
                             print()
@@ -116,7 +128,12 @@ def windows_autocomplete_input(prompt: str) -> Optional[str]:
                                     print(f"  📄 {display_name}")
                             if len(candidates) > 8:
                                 print(f"  ... and {len(candidates) - 8} more")
-                            print(prompt + current_input, end='', flush=True)
+                            print(prompt + current_input, end='')
+                            # Reset cursor position
+                            if cursor_pos < len(current_input):
+                                chars_to_move_back = len(current_input) - cursor_pos
+                                print('\b' * chars_to_move_back, end='')
+                            print('', end='', flush=True)
                 else:
                     # No matches - try to show directory contents
                     if current_input:
@@ -139,19 +156,45 @@ def windows_autocomplete_input(prompt: str) -> Optional[str]:
                                         print(f"  {item}")
                                     if len(items) > 6:
                                         print(f"  ... and {len(items) - 6} more")
-                                    print(prompt + current_input, end='', flush=True)
+                                    print(prompt + current_input, end='')
+                                    # Reset cursor position
+                                    if cursor_pos < len(current_input):
+                                        chars_to_move_back = len(current_input) - cursor_pos
+                                        print('\b' * chars_to_move_back, end='')
+                                    print('', end='', flush=True)
                             except (OSError, PermissionError):
                                 pass
             elif char == b'\x1b':  # Escape
                 print()
                 return None
+            elif char == b'\xe0':  # Extended key prefix (arrow keys, function keys, etc.)
+                extended = msvcrt.getch()  # Get the actual key code
+                if extended == b'K':  # Left arrow
+                    if cursor_pos > 0:
+                        cursor_pos -= 1
+                        print('\b', end='', flush=True)
+                elif extended == b'M':  # Right arrow
+                    if cursor_pos < len(current_input):
+                        cursor_pos += 1
+                        print(current_input[cursor_pos-1], end='', flush=True)
+                elif extended == b'H':  # Up arrow - move to beginning
+                    while cursor_pos > 0:
+                        cursor_pos -= 1
+                        print('\b', end='', flush=True)
+                elif extended == b'P':  # Down arrow - move to end
+                    while cursor_pos < len(current_input):
+                        print(current_input[cursor_pos], end='', flush=True)
+                        cursor_pos += 1
+                # Ignore other extended keys
             else:
                 # Regular character
                 try:
                     char_str = char.decode('utf-8')
                     if ord(char_str) >= 32:  # Printable character
-                        current_input += char_str
-                        print(char_str, end='', flush=True)
+                        # Insert character at cursor position
+                        current_input = current_input[:cursor_pos] + char_str + current_input[cursor_pos:]
+                        cursor_pos += 1
+                        redraw_line()
                 except UnicodeDecodeError:
                     continue
                     
