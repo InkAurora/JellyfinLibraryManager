@@ -27,22 +27,78 @@ class CustomAutocomplete:
         try:
             # Handle both absolute and relative paths
             if os.path.isabs(partial_path):
-                if os.path.isdir(partial_path):
-                    # If it's a complete directory, list its contents
+                # Check if path ends with separator (user is definitely in a directory)
+                if partial_path.endswith(os.sep):
+                    # User is inside a directory, list its contents
+                    base_dir = partial_path.rstrip(os.sep)
+                    search_pattern = ""
+                elif os.path.isdir(partial_path):
+                    # Complete directory path, list its contents  
                     base_dir = partial_path
                     search_pattern = ""
                 else:
-                    # Split into directory and partial filename
-                    base_dir = os.path.dirname(partial_path)
-                    search_pattern = os.path.basename(partial_path).lower()
+                    # Could be partial directory or filename
+                    # Try to find the longest existing directory path
+                    temp_path = partial_path
+                    while temp_path and not os.path.isdir(temp_path):
+                        temp_path = os.path.dirname(temp_path)
+                    
+                    if temp_path and os.path.isdir(temp_path):
+                        base_dir = temp_path
+                        # Everything after the base directory is the search pattern
+                        remaining = partial_path[len(temp_path):].lstrip(os.sep)
+                        search_pattern = remaining.lower()
+                        
+                        # Special case: check if the remaining part exactly matches a directory (case-insensitive)
+                        if remaining:
+                            try:
+                                for item in os.listdir(base_dir):
+                                    if item.lower() == remaining.lower() and os.path.isdir(os.path.join(base_dir, item)):
+                                        # Found exact match! User completed a directory name
+                                        base_dir = os.path.join(base_dir, item)
+                                        search_pattern = ""
+                                        break
+                            except PermissionError:
+                                pass
+                    else:
+                        return []  # No valid directory found
             else:
                 # Relative path from current directory
-                if os.path.sep in partial_path:
-                    base_dir = os.path.dirname(partial_path)
-                    search_pattern = os.path.basename(partial_path).lower()
+                if partial_path.endswith(os.sep):
+                    # User is inside a directory
+                    base_dir = partial_path.rstrip(os.sep)
+                    if not base_dir:
+                        base_dir = os.getcwd()
+                    search_pattern = ""
+                elif os.path.isdir(partial_path):
+                    # Complete directory path
+                    base_dir = partial_path
+                    search_pattern = ""
                 else:
-                    base_dir = os.getcwd()
-                    search_pattern = partial_path.lower()
+                    # Find the longest existing directory path
+                    temp_path = partial_path
+                    while temp_path and not os.path.isdir(temp_path):
+                        temp_path = os.path.dirname(temp_path)
+                    
+                    if temp_path and os.path.isdir(temp_path):
+                        base_dir = temp_path
+                        remaining = partial_path[len(temp_path):].lstrip(os.sep)
+                        search_pattern = remaining.lower()
+                        
+                        # Special case: check if the remaining part exactly matches a directory (case-insensitive)
+                        if remaining:
+                            try:
+                                for item in os.listdir(base_dir):
+                                    if item.lower() == remaining.lower() and os.path.isdir(os.path.join(base_dir, item)):
+                                        # Found exact match! User completed a directory name
+                                        base_dir = os.path.join(base_dir, item)
+                                        search_pattern = ""
+                                        break
+                            except PermissionError:
+                                pass
+                    else:
+                        base_dir = os.getcwd()
+                        search_pattern = partial_path.lower()
             
             # Ensure base directory exists
             if not base_dir:
@@ -336,9 +392,10 @@ class CustomAutocomplete:
                         
                         # Always show suggestions after backspace for better UX and to fix wrapping issues
                         suggestions = self.get_real_time_suggestions(self.input_buffer)
-                        if suggestions and len(suggestions) <= 10 and len(self.input_buffer) >= 2:
+                        if suggestions and len(self.input_buffer) >= 2:
                             # Show suggestions with full screen redraw (fixes wrapping)
-                            self.display_suggestions(suggestions, title, prompt, max_display=6)
+                            max_to_show = min(len(suggestions), 8)
+                            self.display_suggestions(suggestions, title, prompt, max_display=max_to_show)
                             last_suggestions_shown = True
                         else:
                             # No suggestions or input too short, do clean redraw
@@ -386,7 +443,15 @@ class CustomAutocomplete:
                             print()
                             print(f"{prompt}{self.input_buffer}", end='')
                             sys.stdout.flush()
-                            last_suggestions_shown = False
+                            
+                            # Show new suggestions for the completed path
+                            new_suggestions = self.get_real_time_suggestions(self.input_buffer)
+                            if new_suggestions and len(self.input_buffer) >= 3:
+                                max_to_show = min(len(new_suggestions), 8)
+                                self.display_suggestions(new_suggestions, title, prompt, max_display=max_to_show)
+                                last_suggestions_shown = True
+                            else:
+                                last_suggestions_shown = False
                         else:
                             # Multiple matches - find common prefix
                             common_prefix = self.find_common_prefix(suggestions)
@@ -410,7 +475,15 @@ class CustomAutocomplete:
                                 print()
                                 print(f"{prompt}{self.input_buffer}", end='')
                                 sys.stdout.flush()
-                                last_suggestions_shown = False
+                                
+                                # Show new suggestions for the completed common prefix
+                                new_suggestions = self.get_real_time_suggestions(self.input_buffer)
+                                if new_suggestions and len(self.input_buffer) >= 3:
+                                    max_to_show = min(len(new_suggestions), 8)
+                                    self.display_suggestions(new_suggestions, title, prompt, max_display=max_to_show)
+                                    last_suggestions_shown = True
+                                else:
+                                    last_suggestions_shown = False
                             else:
                                 # No useful common prefix - show suggestions
                                 self.display_suggestions(suggestions, title, prompt)
@@ -498,8 +571,11 @@ class CustomAutocomplete:
                     # Show real-time suggestions as user types (but not too aggressively)
                     if len(self.input_buffer) >= 3 and self.input_buffer.count(os.sep) > 0:  # Start suggesting after we have a path
                         suggestions = self.get_real_time_suggestions(self.input_buffer)
-                        if suggestions and len(suggestions) <= 10:  # Only show if manageable number
-                            self.display_suggestions(suggestions, title, prompt, max_display=6)
+                        # Debug: Always show suggestions for testing (remove the count limit temporarily)
+                        if suggestions:
+                            # Limit display but allow more suggestions
+                            max_to_show = min(len(suggestions), 8)
+                            self.display_suggestions(suggestions, title, prompt, max_display=max_to_show)
                             last_suggestions_shown = True
                             
             except (EOFError, KeyboardInterrupt):
