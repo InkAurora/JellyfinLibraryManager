@@ -282,12 +282,17 @@ def path_completer(text: str, state: int) -> Optional[str]:
             
             # Handle different path formats
             original_text = text
-            add_quote = False
+            was_quoted = False
             
-            if text.startswith('"'):
-                # Remove leading quote for processing
+            # Handle quoted paths - remove quotes for processing but remember they were there
+            if text.startswith('"') and text.endswith('"') and len(text) > 1:
+                # Fully quoted path
+                text = text[1:-1]
+                was_quoted = True
+            elif text.startswith('"'):
+                # Partially quoted path (quote at start only)
                 text = text[1:]
-                add_quote = True
+                was_quoted = True
             
             # Expand user directory (~)
             text = os.path.expanduser(text)
@@ -332,31 +337,13 @@ def path_completer(text: str, state: int) -> Optional[str]:
             # Sort matches (directories first, then files)
             raw_matches.sort(key=lambda x: (not x.endswith(os.sep), x.lower()))
             
-            # If there are multiple matches, try to complete to common prefix first
-            if len(raw_matches) > 1:
-                common_prefix = find_common_prefix(raw_matches)
-                # Only use common prefix if it's longer than what user typed
-                if len(common_prefix) > len(text):
-                    if add_quote or ' ' in common_prefix:
-                        if not common_prefix.startswith('"'):
-                            common_prefix = '"' + common_prefix
-                        if not common_prefix.endswith('"') and not common_prefix.endswith(os.sep):
-                            common_prefix = common_prefix + '"'
-                    _completion_matches = [common_prefix]
-                else:
-                    # Add quotes back if the original text had them or if paths contain spaces
-                    for match in raw_matches:
-                        if add_quote or ' ' in match:
-                            if not match.startswith('"'):
-                                match = '"' + match + '"'
-                        _completion_matches.append(match)
-            else:
-                # Single match or no matches
-                for match in raw_matches:
-                    if add_quote or ' ' in match:
-                        if not match.startswith('"'):
-                            match = '"' + match + '"'
-                    _completion_matches.append(match)
+            # Handle quoting logic
+            for match in raw_matches:
+                # Only add quotes if the path contains spaces
+                if ' ' in match:
+                    if not match.startswith('"'):
+                        match = '"' + match + '"'
+                _completion_matches.append(match)
         
         # Return the match for the current state
         if state < len(_completion_matches):

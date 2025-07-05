@@ -106,14 +106,53 @@ def windows_autocomplete_input(prompt: str) -> Optional[str]:
                 if candidates:
                     if len(candidates) == 1:
                         # Single match - complete it
-                        current_input = candidates[0]
+                        completion = candidates[0]
+                        
+                        # Smart quoting: only quote if needed and not already quoted properly
+                        if ' ' in completion:
+                            # If it has spaces but isn't quoted, quote it
+                            if not (completion.startswith('"') and completion.endswith('"')):
+                                # If it's a directory (ends with \), don't close the quote yet
+                                if completion.endswith(os.sep) and not completion.startswith('"'):
+                                    completion = '"' + completion
+                                elif not completion.endswith(os.sep) and not completion.startswith('"'):
+                                    completion = '"' + completion + '"'
+                        
+                        current_input = completion
                         cursor_pos = len(current_input)
                         redraw_line()
                     else:
                         # Multiple matches - find common prefix
-                        common = os.path.commonprefix(candidates)
-                        if len(common) > len(current_input):
-                            current_input = common
+                        # Remove quotes from candidates for prefix calculation
+                        unquoted_candidates = []
+                        for cand in candidates:
+                            if cand.startswith('"') and cand.endswith('"'):
+                                unquoted_candidates.append(cand[1:-1])
+                            elif cand.startswith('"'):
+                                unquoted_candidates.append(cand[1:])
+                            else:
+                                unquoted_candidates.append(cand)
+                        
+                        common = os.path.commonprefix(unquoted_candidates)
+                        
+                        # Remove quotes from current input for comparison
+                        current_unquoted = current_input
+                        if current_unquoted.startswith('"'):
+                            if current_unquoted.endswith('"') and len(current_unquoted) > 1:
+                                current_unquoted = current_unquoted[1:-1]
+                            else:
+                                current_unquoted = current_unquoted[1:]
+                        
+                        if len(common) > len(current_unquoted):
+                            # We can complete to a common prefix
+                            if ' ' in common:
+                                # Add quote at start if needed
+                                if common.endswith(os.sep):
+                                    current_input = '"' + common  # Leave open for further completion
+                                else:
+                                    current_input = '"' + common + '"'  # Close quote for files
+                            else:
+                                current_input = common
                             cursor_pos = len(current_input)
                             redraw_line()
                         else:
@@ -121,8 +160,15 @@ def windows_autocomplete_input(prompt: str) -> Optional[str]:
                             print()
                             print(f"📁 Found {len(candidates)} matches:")
                             for i, candidate in enumerate(candidates[:8]):  # Show first 8
-                                display_name = os.path.basename(candidate.strip('"'))
-                                if os.path.isdir(candidate.strip('"')):
+                                # Clean up display - remove quotes and show just the filename
+                                display_path = candidate
+                                if display_path.startswith('"') and display_path.endswith('"'):
+                                    display_path = display_path[1:-1]
+                                elif display_path.startswith('"'):
+                                    display_path = display_path[1:]
+                                
+                                display_name = os.path.basename(display_path)
+                                if os.path.isdir(display_path):
                                     print(f"  📁 {display_name}/")
                                 else:
                                     print(f"  📄 {display_name}")
