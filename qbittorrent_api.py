@@ -2,6 +2,7 @@
 qBittorrent Web API integration for the Jellyfin Library Manager.
 """
 
+import time
 import requests
 from typing import Optional, List, Dict, Any
 from config import QBITTORRENT_URL, QBITTORRENT_USERNAME, QBITTORRENT_PASSWORD
@@ -9,19 +10,73 @@ from config import QBITTORRENT_URL, QBITTORRENT_USERNAME, QBITTORRENT_PASSWORD
 
 class QBittorrentAPI:
     """Class to handle qBittorrent Web API interactions."""
+
+    REQUEST_TIMEOUT_SECONDS = 5
+    REQUEST_MAX_RETRIES = 2
+    REQUEST_RETRY_BACKOFF_SECONDS = 0.5
     
     def __init__(self, host: str = None, username: str = None, password: str = None):
         self.host = host or QBITTORRENT_URL
         self.username = username or QBITTORRENT_USERNAME
         self.password = password or QBITTORRENT_PASSWORD
         self.session = None
+
+    def _request_with_retry(self, method: str, endpoint: str, **kwargs) -> requests.Response:
+        """Perform a qBittorrent request with timeout and minimal retry/backoff."""
+        timeout = kwargs.pop('timeout', self.REQUEST_TIMEOUT_SECONDS)
+        max_retries = kwargs.pop('max_retries', self.REQUEST_MAX_RETRIES)
+        backoff_seconds = kwargs.pop('backoff_seconds', self.REQUEST_RETRY_BACKOFF_SECONDS)
+        session = kwargs.pop('session', None)
+        request_session = session or self.session
+
+        if request_session is None:
+            raise RuntimeError("No active qBittorrent session")
+
+        last_exception = None
+        url = f"{self.host}{endpoint}"
+
+        for attempt in range(max_retries + 1):
+            try:
+                response = request_session.request(method=method, url=url, timeout=timeout, **kwargs)
+                response.raise_for_status()
+                return response
+            except requests.RequestException as exc:
+                last_exception = exc
+                if attempt < max_retries:
+                    time.sleep(backoff_seconds * (2 ** attempt))
+
+        raise last_exception
+
+    def _request_without_session_with_retry(self, method: str, endpoint: str, **kwargs) -> requests.Response:
+        """Perform a qBittorrent request without session (for health checks) with retry/backoff."""
+        timeout = kwargs.pop('timeout', self.REQUEST_TIMEOUT_SECONDS)
+        max_retries = kwargs.pop('max_retries', self.REQUEST_MAX_RETRIES)
+        backoff_seconds = kwargs.pop('backoff_seconds', self.REQUEST_RETRY_BACKOFF_SECONDS)
+
+        last_exception = None
+        url = f"{self.host}{endpoint}"
+
+        for attempt in range(max_retries + 1):
+            try:
+                response = requests.request(method=method, url=url, timeout=timeout, **kwargs)
+                response.raise_for_status()
+                return response
+            except requests.RequestException as exc:
+                last_exception = exc
+                if attempt < max_retries:
+                    time.sleep(backoff_seconds * (2 ** attempt))
+
+        raise last_exception
     
     def login(self) -> bool:
         """Login to qBittorrent API and return success status."""
         self.session = requests.Session()
         try:
-            response = self.session.post(f"{self.host}/api/v2/auth/login", 
-                                      data={'username': self.username, 'password': self.password})
+            response = self._request_with_retry(
+                "POST",
+                "/api/v2/auth/login",
+                data={'username': self.username, 'password': self.password}
+            )
             if response.text == "Ok.":
                 return True
             else:
@@ -42,7 +97,7 @@ class QBittorrentAPI:
             if download_path:
                 data['savepath'] = download_path
             
-            response = self.session.post(f"{self.host}/api/v2/torrents/add", data=data)
+            response = self._request_with_retry("POST", "/api/v2/torrents/add", data=data)
             return response.text == "Ok."
         except Exception as e:
             print(f"❌ Error adding torrent: {e}")
@@ -54,10 +109,8 @@ class QBittorrentAPI:
             return []
         
         try:
-            response = self.session.get(f"{self.host}/api/v2/torrents/info")
-            if response.status_code == 200:
-                return response.json()
-            return []
+            response = self._request_with_retry("GET", "/api/v2/torrents/info")
+            return response.json()
         except Exception as e:
             print(f"❌ Error getting torrent info: {e}")
             return []
@@ -65,8 +118,8 @@ class QBittorrentAPI:
     def check_connection(self) -> bool:
         """Check if qBittorrent is accessible."""
         try:
-            response = requests.get(f"{self.host}/api/v2/app/version", timeout=5)
-            return response.status_code == 200
+            self._request_without_session_with_retry("GET", "/api/v2/app/version")
+            return True
         except:
             return False
     
@@ -74,7 +127,7 @@ class QBittorrentAPI:
         """Logout from qBittorrent API."""
         if self.session:
             try:
-                self.session.post(f"{self.host}/api/v2/auth/logout")
+                self._request_with_retry("POST", "/api/v2/auth/logout")
             except:
                 pass
             finally:
@@ -90,8 +143,8 @@ class QBittorrentAPI:
                 'hashes': infohash,
                 'deleteFiles': 'true' if delete_files else 'false'
             }
-            response = self.session.post(f"{self.host}/api/v2/torrents/delete", data=data)
-            return response.status_code == 200
+            self._request_with_retry("POST", "/api/v2/torrents/delete", data=data)
+            return True
         except Exception as e:
             print(f"❌ Error removing torrent: {e}")
             return False
@@ -130,13 +183,6 @@ def qb_check_connection() -> bool:
 
 def qb_remove_torrent(session: requests.Session, infohash: str, delete_files: bool = False) -> bool:
     """Remove a torrent from qBittorrent by infohash. Optionally delete files."""
-    try:
-        data = {
-            'hashes': infohash,
-            'deleteFiles': 'true' if delete_files else 'false'
-        }
-        response = session.post(f"{QBITTORRENT_URL}/api/v2/torrents/delete", data=data)
-        return response.status_code == 200
-    except Exception as e:
-        print(f"❌ Error removing torrent: {e}")
-        return False
+    api = QBittorrentAPI()
+    api.session = session
+    return api.remove_torrent(infohash, delete_files)

@@ -12,7 +12,7 @@ from ui import MenuSystem
 from file_utils import list_anime, create_anime_symlinks, remove_symlink_safely, cleanup_jellyfin_files
 from anilist_api import interactive_anilist_search
 from nyaa_api import nyaa_rss_search, navigate_nyaa_results, show_torrent_file_tree
-from qbittorrent_api import qb_check_connection, qb_login, qb_add_torrent
+from qbittorrent_api import qb_check_connection, qb_login, qb_add_torrent, qb_get_torrent_info
 from database import add_torrent_to_database
 from custom_autocomplete import get_anime_folder_with_custom_autocomplete, get_download_path_with_custom_autocomplete
 
@@ -387,7 +387,7 @@ class AnimeManager:
         if success:
             import time
             time.sleep(2)  # Wait a moment for qBittorrent to register the new torrent
-            qb_torrents = session.get(f"{QBITTORRENT_URL}/api/v2/torrents/info").json()
+            qb_torrents = qb_get_torrent_info(session)
             selected_torrent_name = selected_torrent.get('title', '').strip().lower()
             selected_torrent_size_bytes = parse_size(str(selected_torrent.get('size', '0')))
             # Try to match by infohash first
