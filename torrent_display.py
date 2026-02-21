@@ -30,26 +30,6 @@ class TorrentDisplay:
             should_refresh = (current_time - last_refresh) >= refresh_interval
             
             if should_refresh:
-                # Check for completed torrents and auto-add to library
-                try:
-                    from torrent_manager import auto_add_completed_torrents
-                    newly_completed = auto_add_completed_torrents()
-                    if newly_completed:
-                        # Show notification for newly added anime
-                        clear_screen()
-                        print("🎉 NEW ANIME ADDED TO LIBRARY!")
-                        print("=" * 40)
-                        
-                        for torrent in newly_completed:
-                            anilist_info = torrent.get('anilist_info', {})
-                            anime_title = anilist_info.get('title', 'Unknown Anime')
-                            print(f"📚 '{anime_title}' has been automatically added!")
-                        
-                        print("\nContinuing with auto-refresh...")
-                        time.sleep(3)  # Show message briefly
-                except Exception as e:
-                    pass  # Silently handle errors to avoid disrupting the display
-                
                 # Display current status using the main display logic
                 self._display_torrents_refresh()
                 last_refresh = current_time
