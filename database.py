@@ -149,7 +149,8 @@ class NotificationManager:
                     try:
                         with open(self.notifications_path, 'r', encoding='utf-8') as f:
                             notifications = json.load(f)
-                    except:
+                    except Exception as e:
+                        print(f"⚠️  Warning: Could not read existing notifications: {e}")
                         notifications = []
                 
                 # Add new notifications
@@ -176,7 +177,7 @@ class NotificationManager:
                     json.dump(notifications, f, indent=2)
                     
             except Exception as e:
-                pass  # Silently handle errors
+                print(f"⚠️  Warning: Could not save completion notifications: {e}")
     
     def get_pending_notifications(self) -> List[Dict[str, Any]]:
         """Get and clear pending completion notifications."""
@@ -195,6 +196,7 @@ class NotificationManager:
                 return notifications
                 
             except Exception as e:
+                print(f"⚠️  Warning: Could not read pending notifications: {e}")
                 return []
 
 

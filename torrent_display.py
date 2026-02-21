@@ -31,7 +31,12 @@ class TorrentDisplay:
             
             if should_refresh:
                 # Display current status using the main display logic
-                self._display_torrents_refresh()
+                try:
+                    self._display_torrents_refresh()
+                except Exception as e:
+                    clear_screen()
+                    print(f"⚠️  Display refresh error: {e}")
+                    print("💡 Press 'R' to retry refresh or 'Esc' to return to main menu")
                 last_refresh = current_time
             
             # Check for user input (non-blocking)

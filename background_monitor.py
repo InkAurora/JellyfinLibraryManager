@@ -48,8 +48,7 @@ class TorrentBackgroundMonitor:
                     self.notification_manager.save_completion_notifications(newly_completed)
                     
             except Exception as e:
-                # Log errors silently to avoid disrupting the UI
-                pass
+                print(f"⚠️  Background monitor error during auto-add cycle: {e}")
             
             # Wait for the next check (with small intervals to allow clean shutdown)
             for _ in range(self.check_interval * 10):  # Check every 0.1s for shutdown
