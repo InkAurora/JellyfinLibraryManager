@@ -62,7 +62,7 @@ This project follows a modular architecture with clear separation of concerns:
 
 ### Data Persistence
 
-- **`database.py`** - SQLite database for torrent tracking and notifications
+- **`database.py`** - JSON file storage for torrent tracking and notifications (`torrent_database.json`, `torrent_notifications.json`)
 
 ## 🚀 Quick Start
 
@@ -234,7 +234,7 @@ jellyfin-library-manager/
 ├── Core Modules/
 │   ├── ui.py             # User interface system
 │   ├── utils.py          # Common utilities
-│   └── database.py       # Data persistence
+│   └── database.py       # JSON persistence (torrent + notification tracking)
 ├──
 ├── API Integrations/
 │   ├── qbittorrent_api.py # qBittorrent client
