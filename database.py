@@ -19,6 +19,18 @@ class TorrentDatabase:
         """Get the default path to the torrent database file."""
         anime_folder = get_anime_folder()
         return os.path.join(anime_folder, "torrent_database.json")
+
+    def _get_next_torrent_id(self, torrents: List[Dict[str, Any]]) -> int:
+        """Get the next monotonic torrent ID."""
+        max_id = 0
+        for torrent in torrents:
+            try:
+                torrent_id = int(torrent.get("id", 0))
+                if torrent_id > max_id:
+                    max_id = torrent_id
+            except (TypeError, ValueError):
+                continue
+        return max_id + 1
     
     def load(self) -> Dict[str, Any]:
         """Load the torrent database from file."""
@@ -48,10 +60,11 @@ class TorrentDatabase:
     def add_torrent(self, torrent_info: Dict[str, Any]) -> Optional[int]:
         """Add a torrent to the tracking database."""
         db_data = self.load()
+        next_torrent_id = self._get_next_torrent_id(db_data.get("torrents", []))
         
         # Create torrent entry
         torrent_entry = {
-            "id": len(db_data["torrents"]) + 1,
+            "id": next_torrent_id,
             "title": torrent_info.get("title", "Unknown"),
             "size": torrent_info.get("size", "Unknown"),
             "seeds": torrent_info.get("seeds", 0),
