@@ -419,10 +419,13 @@ class AnimeManager:
                     actual_torrent_folder = os.path.join(save_path, name)
             # Add torrent to tracking database
             torrent_db_info = selected_torrent.copy()
+            source_download_path = actual_torrent_folder or (download_path or "Default")
             if actual_torrent_folder:
-                torrent_db_info["download_path"] = actual_torrent_folder
+                torrent_db_info["source_download_path"] = actual_torrent_folder
             else:
-                torrent_db_info["download_path"] = download_path or "Default"
+                torrent_db_info["source_download_path"] = download_path or "Default"
+            torrent_db_info["library_path"] = ""
+            torrent_db_info["download_path"] = source_download_path
             torrent_id = add_torrent_to_database(torrent_db_info)
             clear_screen()
             print("✅ Torrent added successfully!")
@@ -589,9 +592,10 @@ class AnimeManager:
         tracked_torrents = torrent_db.get_tracked_torrents()
         associated_torrent = self._find_associated_torrent_by_track_json(anime_main_folder, tracked_torrents)
         if not associated_torrent:
-            # Fallback: Match by download_path and infohash
+            # Fallback: Match by library_path and infohash
             for torrent in tracked_torrents:
-                if (os.path.abspath(torrent.get("download_path", "")) == os.path.abspath(anime_main_folder)
+                torrent_library_path = torrent.get("library_path") or torrent.get("download_path", "")
+                if (os.path.abspath(torrent_library_path) == os.path.abspath(anime_main_folder)
                     and torrent.get("infohash") not in (None, "N/A")):
                     associated_torrent = torrent
                     break
@@ -768,13 +772,14 @@ class AnimeManager:
                 track_data = json.load(f)
         except Exception:
             return None
-        # Try to match by infohash first, then download_path
+        # Try to match by infohash first, then library_path
         track_infohash = track_data.get("infohash")
-        track_download_path = os.path.abspath(track_data.get("download_path", ""))
+        track_library_path = os.path.abspath(track_data.get("library_path", track_data.get("download_path", "")))
         for torrent in tracked_torrents:
             if track_infohash and torrent.get("infohash") == track_infohash:
                 return torrent
-            if track_download_path and os.path.abspath(torrent.get("download_path", "")) == track_download_path:
+            torrent_library_path = torrent.get("library_path") or torrent.get("download_path", "")
+            if track_library_path and os.path.abspath(torrent_library_path) == track_library_path:
                 return torrent
         return None
 

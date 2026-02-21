@@ -68,6 +68,8 @@ class TorrentDatabase:
         with _db_file_lock:
             db_data = self.load()
             next_torrent_id = self._get_next_torrent_id(db_data.get("torrents", []))
+            source_download_path = torrent_info.get("source_download_path", torrent_info.get("download_path", "Default"))
+            library_path = torrent_info.get("library_path", "")
             
             # Create torrent entry
             torrent_entry = {
@@ -80,7 +82,9 @@ class TorrentDatabase:
                 "infohash": torrent_info.get("infohash", "N/A"),
                 "category": torrent_info.get("category", "N/A"),
                 "link": torrent_info.get("link", "N/A"),
-                "download_path": torrent_info.get("download_path", "Default"),
+                "source_download_path": source_download_path,
+                "library_path": library_path,
+                "download_path": source_download_path,
                 "added_date": datetime.now().isoformat(),
                 "status": "added",
                 "anilist_info": torrent_info.get("anilist_info", {})
@@ -91,6 +95,23 @@ class TorrentDatabase:
             if self.save(db_data):
                 return torrent_entry["id"]
             return None
+
+    def update_torrent_paths(self, torrent_id: int, source_download_path: Optional[str] = None, library_path: Optional[str] = None) -> bool:
+        """Update tracked torrent source/library path fields."""
+        with _db_file_lock:
+            db_data = self.load()
+
+            for torrent in db_data["torrents"]:
+                if torrent["id"] == torrent_id:
+                    if source_download_path is not None:
+                        torrent["source_download_path"] = source_download_path
+                        torrent["download_path"] = source_download_path
+                    if library_path is not None:
+                        torrent["library_path"] = library_path
+                    torrent["path_updated"] = datetime.now().isoformat()
+                    break
+
+            return self.save(db_data)
     
     def get_tracked_torrents(self) -> List[Dict[str, Any]]:
         """Get all tracked torrents from the database."""
@@ -233,6 +254,11 @@ def get_tracked_torrents() -> List[Dict[str, Any]]:
 def update_torrent_status(torrent_id: int, status: str) -> bool:
     """Update the status of a tracked torrent. (Legacy function)"""
     return _torrent_db.update_torrent_status(torrent_id, status)
+
+
+def update_torrent_paths(torrent_id: int, source_download_path: Optional[str] = None, library_path: Optional[str] = None) -> bool:
+    """Update tracked torrent source/library paths. (Legacy function)"""
+    return _torrent_db.update_torrent_paths(torrent_id, source_download_path, library_path)
 
 
 def get_pending_notifications() -> List[Dict[str, Any]]:
