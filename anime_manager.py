@@ -7,7 +7,7 @@ import shutil
 import json
 from typing import List, Tuple
 from config import Colors
-from utils import clear_screen, wait_for_enter, validate_directory, is_episode_file
+from utils import clear_screen, wait_for_enter, validate_directory, is_episode_file, parse_size
 from ui import MenuSystem
 from file_utils import list_anime, create_anime_symlinks, remove_symlink_safely, cleanup_jellyfin_files
 from anilist_api import interactive_anilist_search
@@ -388,6 +388,8 @@ class AnimeManager:
             import time
             time.sleep(2)  # Wait a moment for qBittorrent to register the new torrent
             qb_torrents = session.get(f"{QBITTORRENT_URL}/api/v2/torrents/info").json()
+            selected_torrent_name = selected_torrent.get('title', '').strip().lower()
+            selected_torrent_size_bytes = parse_size(str(selected_torrent.get('size', '0')))
             # Try to match by infohash first
             for qb_torrent in qb_torrents:
                 if qb_torrent.get('hash', '').lower() == selected_torrent.get('infohash', '').lower():
@@ -397,13 +399,24 @@ class AnimeManager:
                     break
             # If not found by infohash, try to match by name and size
             if not actual_torrent_folder:
-                for qb_torrent in qb_torrents:
-                    if (qb_torrent.get('name', '').lower() == selected_torrent.get('title', '').lower() and
-                        abs(qb_torrent.get('size', 0) - int(selected_torrent.get('size', '0').split()[0].replace('.', '').replace('GiB', '').replace('MiB', ''))) < 100000000):
-                        save_path = qb_torrent.get('save_path', download_path or 'Default')
-                        name = qb_torrent.get('name', selected_torrent.get('title', 'Unknown'))
-                        actual_torrent_folder = os.path.join(save_path, name)
-                        break
+                matching_name_torrents = [
+                    qb_torrent for qb_torrent in qb_torrents
+                    if qb_torrent.get('name', '').strip().lower() == selected_torrent_name
+                ]
+
+                best_match = None
+                if matching_name_torrents and selected_torrent_size_bytes > 0:
+                    best_match = min(
+                        matching_name_torrents,
+                        key=lambda qb_torrent: abs(int(qb_torrent.get('size', 0)) - selected_torrent_size_bytes)
+                    )
+                elif len(matching_name_torrents) == 1:
+                    best_match = matching_name_torrents[0]
+
+                if best_match:
+                    save_path = best_match.get('save_path', download_path or 'Default')
+                    name = best_match.get('name', selected_torrent.get('title', 'Unknown'))
+                    actual_torrent_folder = os.path.join(save_path, name)
             # Add torrent to tracking database
             torrent_db_info = selected_torrent.copy()
             if actual_torrent_folder:
