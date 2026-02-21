@@ -29,7 +29,7 @@ A comprehensive media library management tool that automates the organization of
 - **Intuitive Console UI**: Clean, colorful terminal interface
 - **Navigation-friendly**: Arrow key navigation with keyboard shortcuts
 - **Real-time Feedback**: Live updates and status indicators
-- **Cross-platform**: Works on Windows, macOS, and Linux
+- **Platform support**: Currently optimized for Windows terminals
 
 ## 🏗️ Architecture
 
@@ -71,6 +71,19 @@ This project follows a modular architecture with clear separation of concerns:
 - Python 3.7 or higher
 - qBittorrent with Web UI enabled
 - Internet connection for API access
+- Windows OS (current interactive input/navigation relies on `msvcrt`)
+
+### Platform Notes
+
+The current interactive console stack is Windows-oriented because the following modules use `msvcrt`:
+
+- `ui.py`
+- `anilist_api.py`
+- `nyaa_api.py`
+- `custom_autocomplete.py`
+- `torrent_display.py`
+
+Core API and data modules are mostly platform-neutral, but menu/search/keyboard UX paths currently target Windows.
 
 ### Installation
 
@@ -217,7 +230,7 @@ pip install -r requirements.txt
 
 - **API-First**: Native integration with popular services
 - **Extensible**: Easy to add new APIs and features
-- **Cross-platform**: Works on Windows, macOS, and Linux
+- **Platform support**: Windows-first in the current release
 - **Automation**: Background processes for hands-off operation
 
 ## 🛠️ Development
