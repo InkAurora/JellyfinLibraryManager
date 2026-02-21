@@ -6,7 +6,7 @@ import os
 import re
 from typing import List, Dict, Any, Tuple, Optional
 from qbittorrent_api import qb_check_connection, qb_login, qb_get_torrent_info
-from database import get_tracked_torrents, update_torrent_status
+from database import get_tracked_torrents, update_torrent_status, remove_torrent_from_database_by_infohash
 from utils import is_episode_file, get_anime_folder
 from file_utils import create_anime_symlinks
 from ffprobe_utils import probe_video_duration
@@ -242,6 +242,25 @@ class TorrentManager:
                     update_torrent_status(torrent['id'], 'added_to_library')
         
         return completed_torrents
+
+    def remove_torrent_and_library_entry(self, torrent: Dict[str, Any]) -> bool:
+        """Remove torrent files/folders and database entry by infohash."""
+        try:
+            # Remove files/folders
+            anilist_info = torrent.get('anilist_info', {})
+            anime_title = sanitize_filename(anilist_info.get('title', 'Unknown Anime'))
+            anime_base_folder = get_anime_folder()
+            anime_main_folder = os.path.join(anime_base_folder, anime_title)
+            if os.path.exists(anime_main_folder):
+                import shutil
+                shutil.rmtree(anime_main_folder, ignore_errors=True)
+            # Remove from database
+            infohash = torrent.get('infohash')
+            if infohash:
+                remove_torrent_from_database_by_infohash(infohash)
+            return True
+        except Exception:
+            return False
 
     def set_sort_torrent_files_for_jellyfin(self, func):
         """

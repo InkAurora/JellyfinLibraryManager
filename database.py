@@ -212,3 +212,8 @@ def update_torrent_status(torrent_id: int, status: str) -> bool:
 def get_pending_notifications() -> List[Dict[str, Any]]:
     """Get and clear pending completion notifications. (Legacy function)"""
     return _notification_manager.get_pending_notifications()
+
+
+def remove_torrent_from_database_by_infohash(infohash: str) -> int:
+    """Remove all torrents from the database that match the given infohash. (Legacy function)"""
+    return _torrent_db.remove_torrents_by_infohash(infohash)
