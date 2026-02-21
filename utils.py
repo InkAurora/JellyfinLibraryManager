@@ -136,10 +136,24 @@ def clear_screen() -> None:
 
 
 def get_media_folder(movie_path: str) -> str:
-    """Determine media folder based on movie's drive."""
+    """Determine media folder using drive-aware matching with safe fallbacks."""
     from config import MEDIA_FOLDERS
-    drive = os.path.splitdrive(movie_path)[0].upper()
-    return MEDIA_FOLDERS[0] if drive == "C:" else MEDIA_FOLDERS[1]
+
+    configured_folders = MEDIA_FOLDERS if isinstance(MEDIA_FOLDERS, (list, tuple)) else []
+    valid_folders = [folder for folder in configured_folders if isinstance(folder, str) and folder.strip()]
+
+    if not valid_folders:
+        movie_parent = os.path.dirname(os.path.abspath(movie_path))
+        return movie_parent or os.getcwd()
+
+    movie_drive = os.path.splitdrive(os.path.abspath(movie_path))[0].upper()
+
+    for folder in valid_folders:
+        folder_drive = os.path.splitdrive(os.path.abspath(folder))[0].upper()
+        if movie_drive and folder_drive == movie_drive:
+            return folder
+
+    return valid_folders[0]
 
 
 def get_anime_folder() -> str:
