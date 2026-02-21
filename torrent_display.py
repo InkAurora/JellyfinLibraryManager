@@ -9,7 +9,6 @@ from config import Colors
 from utils import clear_screen, wait_for_enter, format_bytes, format_speed, format_eta, get_current_timestamp
 from ui import MenuSystem
 from torrent_manager import sync_torrents_with_qbittorrent
-from database import get_pending_notifications
 
 
 class TorrentDisplay:

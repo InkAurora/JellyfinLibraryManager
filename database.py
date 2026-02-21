@@ -7,6 +7,7 @@ import json
 import threading
 from datetime import datetime
 from typing import Dict, List, Optional, Any
+from config import NOTIFICATION_RETENTION_HOURS
 from utils import get_anime_folder
 
 
@@ -190,7 +191,8 @@ class NotificationManager:
                 
                 # Keep only recent notifications (last 24 hours)
                 current_time = datetime.now().timestamp()
-                notifications = [n for n in notifications if current_time - n['timestamp'] < 86400]
+                retention_seconds = max(1, int(NOTIFICATION_RETENTION_HOURS * 3600))
+                notifications = [n for n in notifications if current_time - n['timestamp'] < retention_seconds]
                 
                 # Save notifications
                 os.makedirs(os.path.dirname(self.notifications_path), exist_ok=True)
