@@ -605,6 +605,11 @@ class AnimeManager:
             print(f"✅ Removed anime '{anime_name}' from library.")
 
             if associated_torrent:
+                infohash = associated_torrent.get("infohash")
+                if infohash and infohash != "N/A":
+                    torrent_db.remove_torrents_by_infohash(infohash)
+
+            if associated_torrent:
                 remove_options = [
                     "❌ No, keep torrent in qBittorrent",
                     "🗑️  Yes, remove torrent from qBittorrent (optionally delete files)"
@@ -718,6 +723,24 @@ class AnimeManager:
             
             # If no seasons left, remove the main anime folder
             if not remaining_seasons:
+                associated_torrent = None
+                from database import TorrentDatabase
+                torrent_db = TorrentDatabase()
+                tracked_torrents = torrent_db.get_tracked_torrents()
+                associated_torrent = self._find_associated_torrent_by_track_json(anime_main_folder, tracked_torrents)
+                if not associated_torrent:
+                    for torrent in tracked_torrents:
+                        torrent_library_path = torrent.get("library_path") or torrent.get("download_path", "")
+                        if (os.path.abspath(torrent_library_path) == os.path.abspath(anime_main_folder)
+                            and torrent.get("infohash") not in (None, "N/A")):
+                            associated_torrent = torrent
+                            break
+
+                if associated_torrent:
+                    infohash = associated_torrent.get("infohash")
+                    if infohash and infohash != "N/A":
+                        torrent_db.remove_torrents_by_infohash(infohash)
+
                 # Safety check: Never remove the root anime folder
                 from utils import get_anime_folder
                 anime_base_folder = get_anime_folder()

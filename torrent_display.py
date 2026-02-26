@@ -4,7 +4,8 @@ Torrent display and monitoring module for the Jellyfin Library Manager.
 
 import time
 import msvcrt
-from typing import List, Dict, Any
+import threading
+from typing import List, Dict, Any, Optional, Tuple
 from config import Colors
 from utils import clear_screen, wait_for_enter, format_bytes, format_speed, format_eta, get_current_timestamp
 from ui import MenuSystem
@@ -16,63 +17,110 @@ class TorrentDisplay:
     
     def __init__(self):
         self.menu_system = MenuSystem()
-    
+        self._sync_result: Optional[Tuple] = None
+        self._sync_in_progress = False
+        self._sync_lock = threading.Lock()
+
+    def _run_sync_in_background(self) -> None:
+        """Run sync_torrents_with_qbittorrent in a background thread and cache the result."""
+        try:
+            result = sync_torrents_with_qbittorrent()
+        except Exception as e:
+            result = (None, str(e))
+        with self._sync_lock:
+            self._sync_result = result
+            self._sync_in_progress = False
+
+    def _show_loading_screen(self) -> None:
+        """Show a loading screen while waiting for the first sync result."""
+        clear_screen()
+        print(f"🔄 Auto-refreshing every 5s | Connecting...")
+        print("💡 Press 'R' to refresh now, 'Esc' to return to main menu")
+        print("🤖 Background monitoring: Active - completed torrents auto-added to library")
+        print()
+        print("⏳ Fetching torrent status from qBittorrent...")
+
     def display_tracked_torrents_with_auto_refresh(self) -> None:
         """Display tracked torrents with auto-refresh every 5 seconds."""
         last_refresh = 0
         refresh_interval = 5  # seconds
-        
-        while True:
+        exit_requested = False
+
+        # Show loading screen immediately so the terminal doesn't appear frozen
+        self._show_loading_screen()
+
+        while not exit_requested:
             current_time = time.time()
-            
-            # Check for auto-refresh or force refresh
+
+            # Check for user input (non-blocking) — always processed, even during sync
+            while msvcrt.kbhit():
+                key = msvcrt.getch()
+                if key in (b'\x00', b'\xe0'):
+                    # Consume the second byte of a multi-byte key sequence
+                    if msvcrt.kbhit():
+                        msvcrt.getch()
+                elif key == b'\x1b':  # Esc key
+                    exit_requested = True
+                    break
+                elif key in (b'r', b'R'):  # Manual refresh
+                    last_refresh = 0  # Force refresh on next iteration
+
+            if exit_requested:
+                break
+
+            # Kick off a background sync when the interval has elapsed and none is running
+            with self._sync_lock:
+                sync_pending = self._sync_in_progress
+
             should_refresh = (current_time - last_refresh) >= refresh_interval
-            
-            if should_refresh:
-                # Display current status using the main display logic
+            if should_refresh and not sync_pending:
+                with self._sync_lock:
+                    self._sync_in_progress = True
+                    self._sync_result = None  # Clear stale result while fetching
+                threading.Thread(target=self._run_sync_in_background, daemon=True).start()
+                last_refresh = time.time()  # Reset timer using time AFTER starting sync
+
+            # Render display whenever a fresh sync result is available
+            with self._sync_lock:
+                result_ready = self._sync_result is not None
+                if result_ready:
+                    cached_result = self._sync_result
+
+            if result_ready:
+                synced_torrents, error = cached_result
                 try:
-                    self._display_torrents_refresh()
+                    self._render_display(synced_torrents, error)
                 except Exception as e:
                     clear_screen()
-                    print(f"⚠️  Display refresh error: {e}")
-                    print("💡 Press 'R' to retry refresh or 'Esc' to return to main menu")
-                last_refresh = current_time
-            
-            # Check for user input (non-blocking)
-            if msvcrt.kbhit():
-                key = msvcrt.getch()
-                if key == b'\x1b':  # Esc key
-                    return
-                elif key == b'r' or key == b'R':  # Manual refresh
-                    last_refresh = 0  # Force refresh on next iteration
-            
+                    print(f"⚠️  Display render error: {e}")
+                    print("💡 Press 'R' to refresh now, 'Esc' to return to main menu")
+                with self._sync_lock:
+                    self._sync_result = None  # Mark result as consumed
+
             # Small delay to prevent excessive CPU usage
             time.sleep(0.1)
     
-    def _display_torrents_refresh(self) -> None:
-        """Display torrents with auto-refresh header (called by auto-refresh loop)."""
+    def _render_display(self, synced_torrents, error) -> None:
+        """Render the torrent display with pre-fetched sync results."""
         clear_screen()
-        
+
         # Get current time for display
         current_time = get_current_timestamp()
         print(f"🔄 Auto-refreshing every 5s | Last update: {current_time}")
         print("💡 Press 'R' to refresh now, 'Esc' to return to main menu")
         print("🤖 Background monitoring: Active - completed torrents auto-added to library")
         print()
-        
-        # Sync with qBittorrent to get current status
-        synced_torrents, error = sync_torrents_with_qbittorrent()
-        
+
         if error:
             print(f"❌ Error syncing with qBittorrent: {error}")
             print("💡 Make sure qBittorrent is running and Web UI is accessible.")
             return
-        
+
         if not synced_torrents:
             print("📋 No torrents tracked yet.")
             print("💡 Torrents will appear here after downloading via the script.")
             return
-        
+
         self._show_torrent_status_compact(synced_torrents)
     
     def _show_torrent_status_compact(self, synced_torrents: List[Dict[str, Any]]) -> None:
