@@ -14,6 +14,8 @@ class QBittorrentAPI:
     REQUEST_TIMEOUT_SECONDS = 5
     REQUEST_MAX_RETRIES = 2
     REQUEST_RETRY_BACKOFF_SECONDS = 0.5
+    HEALTHCHECK_TIMEOUT_SECONDS = 1
+    HEALTHCHECK_MAX_RETRIES = 0
     
     def __init__(self, host: str = None, username: str = None, password: str = None):
         self.host = host or QBITTORRENT_URL
@@ -70,6 +72,10 @@ class QBittorrentAPI:
     
     def login(self) -> bool:
         """Login to qBittorrent API and return success status."""
+        if not self.check_connection():
+            self.session = None
+            return False
+
         self.session = requests.Session()
         try:
             response = self._request_with_retry(
@@ -118,7 +124,12 @@ class QBittorrentAPI:
     def check_connection(self) -> bool:
         """Check if qBittorrent is accessible."""
         try:
-            self._request_without_session_with_retry("GET", "/api/v2/app/version")
+            self._request_without_session_with_retry(
+                "GET",
+                "/api/v2/app/version",
+                timeout=self.HEALTHCHECK_TIMEOUT_SECONDS,
+                max_retries=self.HEALTHCHECK_MAX_RETRIES
+            )
             return True
         except:
             return False
