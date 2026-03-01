@@ -164,19 +164,26 @@ class TorrentManager:
             file_structure = self.sort_torrent_files_for_jellyfin(torrent, download_path)
             if not file_structure:
                 return False
+            linked_or_existing_files = 0
             # Create folders and symlinks as described in the file structure
             for folder in file_structure['folders']:
                 try:
                     os.makedirs(folder['path'], exist_ok=True)
-                except Exception:
+                except Exception as e:
+                    print(f"❌ Error creating folder '{folder['path']}': {e}")
                     return False
                 for file_entry in folder['files']:
                     if os.path.exists(file_entry['target']):
+                        linked_or_existing_files += 1
                         continue
                     try:
                         os.symlink(file_entry['source'], file_entry['target'])
-                    except Exception:
-                        pass
+                        linked_or_existing_files += 1
+                    except Exception as e:
+                        print(f"⚠️  Warning: Could not create symlink for '{file_entry['target']}': {e}")
+            if linked_or_existing_files == 0:
+                print("⚠️  Warning: No media files were linked to the library.")
+                return False
             # Write tracking info to track.json in the anime main folder
             import json
             anime_main_folder = file_structure['root']
@@ -189,9 +196,10 @@ class TorrentManager:
                 with open(track_path, "w", encoding="utf-8") as f:
                     json.dump(track_torrent, f, indent=2)
             except Exception as e:
-                pass  # Optionally log or print error
+                print(f"⚠️  Warning: Could not save tracking info: {e}")
             return True
-        except Exception:
+        except Exception as e:
+            print(f"❌ Error adding completed torrent to library: {e}")
             return False
     
     def auto_add_completed_torrents(self) -> List[Dict[str, Any]]:

@@ -128,7 +128,7 @@ class TorrentDisplay:
         # Separate torrents by status
         downloading = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['downloading', 'stalledDL', 'queuedDL', 'allocating']]
         seeding = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['uploading', 'stalledUP', 'queuedUP']]
-        completed = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['pausedUP', 'stalledUP']]
+        completed = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['pausedUP']]
         paused = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['pausedDL']]
         error_torrents = [t for t in synced_torrents if t.get('found_in_qb') and t.get('qb_status') in ['error', 'missingFiles']]
         not_found = [t for t in synced_torrents if not t.get('found_in_qb')]
