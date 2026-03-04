@@ -7,7 +7,7 @@ import shutil
 import time
 from typing import List, Tuple, Dict, Any, Optional
 from config import Colors
-from utils import clear_screen, wait_for_enter, get_media_folder, validate_video_file
+from utils import clear_screen, wait_for_enter, get_media_folder, validate_video_file, format_bytes
 from ui import MenuSystem
 from file_utils import find_existing_symlink, list_movies, create_movie_symlink, remove_symlink_safely
 from custom_autocomplete import get_movie_file_with_custom_autocomplete, get_download_path_with_custom_autocomplete
@@ -243,18 +243,38 @@ class MovieManager:
 
     def _select_search_result(self, results: List[Dict[str, Any]], title: str) -> Dict[str, Any]:
         """Show torrent results and return the selected one."""
-        max_results = min(30, len(results))
-        options = []
-        for item in results[:max_results]:
-            seeds = item.get("nbSeeders", 0)
-            size = item.get("fileSize", 0)
-            name = str(item.get("fileName", "Unknown"))
-            short_name = name if len(name) <= 75 else name[:72] + "..."
-            options.append(f"[S:{seeds}] [Size:{size}] {short_name}")
-        options.append("🔙 Cancel")
+        def _seeds(item: Dict[str, Any]) -> int:
+            try:
+                return int(item.get("nbSeeders", 0) or 0)
+            except (TypeError, ValueError):
+                return 0
 
-        choice = self.menu_system.navigate_menu(options, title)
-        if choice == -1 or choice == len(options) - 1:
+        def _size(item: Dict[str, Any]) -> int:
+            try:
+                return int(item.get("fileSize", 0) or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        def _row(item: Dict[str, Any]) -> str:
+            seeds = _seeds(item)
+            raw_size = _size(item)
+            try:
+                size = format_bytes(int(raw_size))
+            except (TypeError, ValueError):
+                size = str(raw_size)
+            name = str(item.get("fileName", "Unknown"))
+            short_name = name if len(name) <= 90 else name[:87] + "..."
+            return f"[S:{seeds:>4}] [Size:{size:>9}] {short_name}"
+
+        choice = self.menu_system.navigate_search_results(
+            items=results,
+            title=title,
+            row_formatter=_row,
+            seeds_extractor=_seeds,
+            size_extractor=_size,
+            page_size=12
+        )
+        if choice == -1:
             return {}
         return results[choice]
 

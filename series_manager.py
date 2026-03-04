@@ -6,7 +6,7 @@ import os
 import time
 from typing import List, Dict, Any, Optional
 from config import Colors
-from utils import clear_screen, wait_for_enter, validate_directory, is_episode_file
+from utils import clear_screen, wait_for_enter, validate_directory, is_episode_file, format_bytes
 from ui import MenuSystem
 from file_utils import list_series, create_series_symlinks, remove_symlink_safely
 from tmdb_api import interactive_tmdb_series_selection
@@ -260,18 +260,38 @@ class SeriesManager:
 
     def _select_search_result(self, results: List[Dict[str, Any]], title: str) -> Dict[str, Any]:
         """Show torrent results and return the selected one."""
-        max_results = min(30, len(results))
-        options = []
-        for item in results[:max_results]:
-            seeds = item.get("nbSeeders", 0)
-            size = item.get("fileSize", 0)
-            name = str(item.get("fileName", "Unknown"))
-            short_name = name if len(name) <= 75 else name[:72] + "..."
-            options.append(f"[S:{seeds}] [Size:{size}] {short_name}")
-        options.append("🔙 Cancel")
+        def _seeds(item: Dict[str, Any]) -> int:
+            try:
+                return int(item.get("nbSeeders", 0) or 0)
+            except (TypeError, ValueError):
+                return 0
 
-        choice = self.menu_system.navigate_menu(options, title)
-        if choice == -1 or choice == len(options) - 1:
+        def _size(item: Dict[str, Any]) -> int:
+            try:
+                return int(item.get("fileSize", 0) or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        def _row(item: Dict[str, Any]) -> str:
+            seeds = _seeds(item)
+            raw_size = _size(item)
+            try:
+                size = format_bytes(int(raw_size))
+            except (TypeError, ValueError):
+                size = str(raw_size)
+            name = str(item.get("fileName", "Unknown"))
+            short_name = name if len(name) <= 90 else name[:87] + "..."
+            return f"[S:{seeds:>4}] [Size:{size:>9}] {short_name}"
+
+        choice = self.menu_system.navigate_search_results(
+            items=results,
+            title=title,
+            row_formatter=_row,
+            seeds_extractor=_seeds,
+            size_extractor=_size,
+            page_size=12
+        )
+        if choice == -1:
             return {}
         return results[choice]
 

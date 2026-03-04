@@ -9,6 +9,7 @@ import msvcrt
 from typing import List, Dict, Any, Optional, Union
 from bs4 import BeautifulSoup
 from utils import clear_screen, parse_size
+from ui import MenuSystem
 
 
 class NyaaAPI:
@@ -57,76 +58,41 @@ class NyaaAPI:
         else:
             return sorted(results, key=lambda x: parse_size(x['size']), reverse=True)
     
-    def navigate_results(self, results: List[Dict[str, Any]], window_size: int = 10) -> Optional[Dict[str, Any]]:
-        """Allow user to scroll through nyaa.si results with up/down keys and select one."""
+    def navigate_results(self, results: List[Dict[str, Any]], window_size: int = 10) -> Union[Optional[Dict[str, Any]], str]:
+        """Allow user to navigate nyaa.si results with shortcuts and select one."""
         if not results:
             return None
-        
-        start_idx = 0
-        max_idx = len(results) - 1
-        num_str = ''
-        sort_by = 'seeds'  # or 'size'
-        
-        while True:
-            # Sort results by current sort key
-            sorted_results = self.sort_torrents(results, sort_by)
-            clear_screen()
-            print(f"Navigate with ↑↓, type number then Enter to select, 's' to sort by {'size' if sort_by == 'seeds' else 'seeds'}, Esc to cancel, / to custom search\n")
-            print(f"{'#':<2} {'Seeds':<6} {'Size':<10} Title")
-            print("-" * 60)
-            
-            for i in range(window_size):
-                idx = start_idx + i
-                if idx > max_idx:
-                    break
-                torrent = sorted_results[idx]
-                title = torrent['title']
-                if len(title) > 100:
-                    title = title[:97] + '...'
-                print(f"{idx+1:<2} {torrent['seeds']:<6} {torrent['size']:<10} {title}")
-            
-            if num_str:
-                print(f"\nSelected number: {num_str}")
-                try:
-                    idx = int(num_str) - 1
-                    if 0 <= idx <= max_idx:
-                        preview = sorted_results[idx]
-                        print("\nPreview:")
-                        print(f"Title: {preview['title']}")
-                        print(f"Seeds: {preview['seeds']}")
-                        print(f"Size: {preview['size']}")
-                        print(f"Link: {preview['link']}")
-                except Exception:
-                    pass
-            
-            key = msvcrt.getch()
-            if key == b'\xe0':  # Arrow key prefix
-                key = msvcrt.getch()
-                if key == b'P':  # Down
-                    if start_idx + window_size <= max_idx:
-                        start_idx += 1
-                elif key == b'H':  # Up
-                    if start_idx > 0:
-                        start_idx -= 1
-            elif key == b'\x1b':  # Esc
-                return None
-            elif key == b's':
-                sort_by = 'size' if sort_by == 'seeds' else 'seeds'
-                start_idx = 0
-            elif key.isdigit():
-                num_str += key.decode()
-            elif key == b'\r':  # Enter
-                if num_str:
-                    idx = int(num_str) - 1
-                    if 0 <= idx <= max_idx:
-                        return sorted_results[idx]
-                    else:
-                        num_str = ''  # Invalid, reset
-                # If Enter with no number, do nothing
-            elif key == b'/':
-                return 'HOTKEY_MANUAL_SEARCH'
-            else:
-                num_str = ''  # Reset on any other key
+
+        def _seeds(item: Dict[str, Any]) -> int:
+            try:
+                return int(item.get("seeds", 0) or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        def _size(item: Dict[str, Any]) -> int:
+            return parse_size(str(item.get("size", "0")))
+
+        def _row(item: Dict[str, Any]) -> str:
+            title = str(item.get("title", "N/A"))
+            short_title = title if len(title) <= 90 else title[:87] + "..."
+            return f"[S:{_seeds(item):>4}] [Size:{str(item.get('size', 'Unknown')):>10}] {short_title}"
+
+        choice = MenuSystem.navigate_search_results(
+            items=results,
+            title="🔎 Nyaa Search Results",
+            row_formatter=_row,
+            seeds_extractor=_seeds,
+            size_extractor=_size,
+            page_size=window_size,
+            extra_hotkeys={b'/': 'HOTKEY_MANUAL_SEARCH'},
+            extra_hint="💡 Press / for custom search."
+        )
+
+        if choice == -1:
+            return None
+        if isinstance(choice, str):
+            return choice
+        return results[choice]
     
     def get_torrent_file_list(self, torrent_page_url: str) -> List[str]:
         """Scrape the torrent page to get the file list, preserving folder structure."""
@@ -261,7 +227,7 @@ def sort_torrents(results: List[Dict[str, Any]], sort_by: str) -> List[Dict[str,
     return _nyaa_api.sort_torrents(results, sort_by)
 
 
-def navigate_nyaa_results(results: List[Dict[str, Any]], window_size: int = 10) -> Optional[Dict[str, Any]]:
+def navigate_nyaa_results(results: List[Dict[str, Any]], window_size: int = 10) -> Union[Optional[Dict[str, Any]], str]:
     """Allow user to scroll through nyaa.si results. (Legacy function)"""
     return _nyaa_api.navigate_results(results, window_size)
 
