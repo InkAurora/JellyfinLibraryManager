@@ -160,6 +160,96 @@ class QBittorrentAPI:
             print(f"❌ Error removing torrent: {e}")
             return False
 
+    def get_search_plugins(self) -> List[Dict[str, Any]]:
+        """Get configured qBittorrent search plugins."""
+        if not self.session:
+            return []
+
+        try:
+            response = self._request_with_retry("GET", "/api/v2/search/plugins")
+            return response.json()
+        except Exception as e:
+            print(f"❌ Error getting qBittorrent search plugins: {e}")
+            return []
+
+    def start_search(self, pattern: str, category: str = "all", plugins: str = "enabled") -> Optional[int]:
+        """Start qBittorrent search and return search job ID."""
+        if not self.session:
+            return None
+
+        try:
+            response = self._request_with_retry(
+                "POST",
+                "/api/v2/search/start",
+                data={"pattern": pattern, "category": category, "plugins": plugins}
+            )
+            payload = response.json()
+            search_id = payload.get("id")
+            return int(search_id) if search_id is not None else None
+        except Exception as e:
+            try:
+                response = self._request_with_retry(
+                    "GET",
+                    "/api/v2/search/start",
+                    params={"pattern": pattern, "category": category, "plugins": plugins}
+                )
+                payload = response.json()
+                search_id = payload.get("id")
+                return int(search_id) if search_id is not None else None
+            except Exception:
+                print(f"❌ Error starting qBittorrent search: {e}")
+                return None
+
+    def get_search_status(self, search_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Get qBittorrent search job statuses."""
+        if not self.session:
+            return []
+
+        try:
+            response = self._request_with_retry("GET", "/api/v2/search/status")
+            statuses = response.json()
+            if search_id is None:
+                return statuses
+            return [status for status in statuses if int(status.get("id", -1)) == int(search_id)]
+        except Exception as e:
+            print(f"❌ Error getting qBittorrent search status: {e}")
+            return []
+
+    def get_search_results(self, search_id: int, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """Get qBittorrent search results for a job ID."""
+        if not self.session:
+            return []
+
+        try:
+            response = self._request_with_retry(
+                "GET",
+                "/api/v2/search/results",
+                params={"id": int(search_id), "limit": int(limit), "offset": int(offset)}
+            )
+            payload = response.json()
+            if isinstance(payload, dict):
+                return payload.get("results", [])
+            return payload if isinstance(payload, list) else []
+        except Exception as e:
+            print(f"❌ Error getting qBittorrent search results: {e}")
+            return []
+
+    def delete_search(self, search_id: int) -> bool:
+        """Delete a qBittorrent search job."""
+        if not self.session:
+            return False
+
+        try:
+            self._request_with_retry("POST", "/api/v2/search/delete", data={"id": int(search_id)})
+            return True
+        except Exception as e:
+            try:
+                self._request_with_retry("GET", "/api/v2/search/delete", params={"id": int(search_id)})
+                return True
+            except Exception:
+                print(f"❌ Error deleting qBittorrent search job: {e}")
+                return False
+
 
 # Global instance for backward compatibility
 _qb_api = QBittorrentAPI()
@@ -197,3 +287,38 @@ def qb_remove_torrent(session: requests.Session, infohash: str, delete_files: bo
     api = QBittorrentAPI()
     api.session = session
     return api.remove_torrent(infohash, delete_files)
+
+
+def qb_get_search_plugins(session: requests.Session) -> List[Dict[str, Any]]:
+    """Get configured qBittorrent search plugins. (Legacy function)"""
+    api = QBittorrentAPI()
+    api.session = session
+    return api.get_search_plugins()
+
+
+def qb_start_search(session: requests.Session, pattern: str, category: str = "all", plugins: str = "enabled") -> Optional[int]:
+    """Start qBittorrent search and return job ID. (Legacy function)"""
+    api = QBittorrentAPI()
+    api.session = session
+    return api.start_search(pattern, category, plugins)
+
+
+def qb_get_search_status(session: requests.Session, search_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Get qBittorrent search statuses. (Legacy function)"""
+    api = QBittorrentAPI()
+    api.session = session
+    return api.get_search_status(search_id)
+
+
+def qb_get_search_results(session: requests.Session, search_id: int, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    """Get qBittorrent search results for a job. (Legacy function)"""
+    api = QBittorrentAPI()
+    api.session = session
+    return api.get_search_results(search_id, limit, offset)
+
+
+def qb_delete_search(session: requests.Session, search_id: int) -> bool:
+    """Delete qBittorrent search job. (Legacy function)"""
+    api = QBittorrentAPI()
+    api.session = session
+    return api.delete_search(search_id)

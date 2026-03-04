@@ -1,135 +1,152 @@
 """
-Movie management module for the Jellyfin Library Manager.
+Series management module for the Jellyfin Library Manager.
 """
 
 import os
-import shutil
 import time
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Dict, Any, Optional
 from config import Colors
-from utils import clear_screen, wait_for_enter, get_media_folder, validate_video_file
+from utils import clear_screen, wait_for_enter, validate_directory, is_episode_file
 from ui import MenuSystem
-from file_utils import find_existing_symlink, list_movies, create_movie_symlink, remove_symlink_safely
-from custom_autocomplete import get_movie_file_with_custom_autocomplete, get_download_path_with_custom_autocomplete
+from file_utils import list_series, create_series_symlinks, remove_symlink_safely
+from tmdb_api import interactive_tmdb_series_selection
 from qbittorrent_api import (
     qb_check_connection, qb_login, qb_add_torrent, qb_get_search_plugins,
     qb_start_search, qb_get_search_status, qb_get_search_results, qb_delete_search
 )
-from database import add_torrent_to_database
-from tmdb_api import interactive_tmdb_movie_selection
+from database import add_torrent_to_database, get_tracked_torrents, remove_torrent_from_database_by_infohash
+from custom_autocomplete import (
+    get_series_folder_with_custom_autocomplete,
+    get_download_path_with_custom_autocomplete
+)
 
 
-class MovieManager:
-    """Class to handle movie management operations."""
-    
+class SeriesManager:
+    """Class to handle series management operations."""
+
     def __init__(self):
         self.menu_system = MenuSystem()
-    
-    def display_movies(self) -> None:
-        """Display all movies in the library."""
-        movies = list_movies()
-        
-        if not movies:
-            self.menu_system.show_message("\n📁 No movies found in your Jellyfin library.")
+
+    def display_series(self) -> None:
+        """Display all series in the library grouped by season."""
+        series_list = list_series()
+
+        if not series_list:
+            self.menu_system.show_message("\n📺 No series found in your library.")
             return
-        
+
         clear_screen()
-        print(f"\n📚 Your Jellyfin Library ({len(movies)} movies):")
+        print(f"\n📺 Your Series Library ({len(series_list)} series):")
         print("=" * 60)
-        
-        for i, (name, symlink_path, target_path) in enumerate(movies, 1):
-            status = "❌ BROKEN" if target_path == "BROKEN LINK" else "✅ OK"
-            # Use cyan color for movie title
-            print(f"{i:3d}. {Colors.CYAN}{name}{Colors.RESET}")
-            print(f"     📍 Symlink: {Colors.YELLOW}{symlink_path}{Colors.RESET}")
-            if target_path != "BROKEN LINK":
-                print(f"     🎬 Target:  {Colors.GREEN}{target_path}{Colors.RESET}")
-            else:
-                print(f"     🎬 Target:  {Colors.RED}BROKEN LINK{Colors.RESET}")
-            print(f"     {status}")
+
+        for i, (series_name, seasons) in enumerate(series_list, 1):
+            total_episodes = 0
+            broken_seasons = 0
+            print(f"{i:3d}. {Colors.MAGENTA}{series_name}{Colors.RESET}")
+
+            for season_name, season_path, target_path in seasons:
+                if os.path.exists(season_path):
+                    episode_files = [
+                        f for f in os.listdir(season_path)
+                        if os.path.isfile(os.path.join(season_path, f)) and is_episode_file(f)
+                    ]
+                    total_episodes += len(episode_files)
+
+                status = "❌ BROKEN" if target_path in ["BROKEN LINK", "ACCESS DENIED", "NO_SYMLINKS", "EMPTY"] else "✅ OK"
+                if status == "❌ BROKEN":
+                    broken_seasons += 1
+
+                season_label = "Specials" if season_name == "Season 00" else season_name
+                print(f"     📍 {Colors.YELLOW}{season_label}{Colors.RESET}: {status}")
+
+            print(f"     📊 Total Episodes: {total_episodes}")
+            if broken_seasons > 0:
+                print(f"     ⚠️  Broken Seasons: {broken_seasons}")
             print()
-        
+
         wait_for_enter()
-    
-    def add_movie(self) -> None:
-        """Add a new movie to the library."""
+
+    def add_series(self) -> None:
+        """Add a new series to the library."""
+        clear_screen()
+        print("\n📺 Add New Series")
+        print("=" * 35)
+
         source_options = [
-            "📁 Add from local file",
-            "🌐 Download movie (qBittorrent Search API)"
+            "📁 Add from local files",
+            "🌐 Download series (qBittorrent Search API)"
         ]
-        source_choice = self.menu_system.navigate_menu(source_options, "🎬 Add New Movie")
+        source_choice = self.menu_system.navigate_menu(source_options, "Select series source")
         if source_choice == -1:
             self.menu_system.show_message("\n❌ Cancelled.")
             return
-        if source_choice == 0:
-            self._add_movie_from_local_file()
-        elif source_choice == 1:
-            self._add_movie_via_download()
 
-    def _add_movie_from_local_file(self) -> None:
-        """Add a local movie file to the library."""
-        # Use the new custom autocomplete system
-        movie_path = get_movie_file_with_custom_autocomplete()
-        
-        if not movie_path or not movie_path.strip():
-            print("❌ No file path provided.")
+        if source_choice == 0:
+            self._add_series_from_local_files()
+        elif source_choice == 1:
+            self._add_series_via_download()
+
+    def _add_series_from_local_files(self) -> None:
+        """Add series from local files."""
+        series_folder_path = get_series_folder_with_custom_autocomplete()
+
+        if not series_folder_path or not series_folder_path.strip():
+            print("❌ No folder path provided.")
             wait_for_enter()
             return
-        
-        # Clean up the path (no quotes needed with custom system)
-        movie_path = movie_path.strip()
-        
-        if not validate_video_file(movie_path):
+
+        series_folder_path = series_folder_path.strip()
+        if not validate_directory(series_folder_path):
             wait_for_enter()
             return
-        
-        # Convert to absolute path for processing
-        movie_path = os.path.abspath(movie_path)
-        
-        # Check if movie already exists
-        from utils import get_all_media_folders
-        media_folders = get_all_media_folders()
-        existing_symlink, existing_subfolder = find_existing_symlink(movie_path, media_folders)
-        
-        if existing_symlink:
-            movie_name = os.path.splitext(os.path.basename(movie_path))[0]
-            print(f"⚠️  Movie '{movie_name}' already exists at '{existing_symlink}'.")
-            
-            action_options = ["⏭️  Skip", "🔄 Overwrite existing"]
-            action_choice = self.menu_system.navigate_menu(action_options, f"Movie '{movie_name}' already exists")
-            
-            if action_choice == 0:  # Skip
-                self.menu_system.show_message("⏭️  Skipping.")
+
+        series_folder_path = os.path.abspath(series_folder_path)
+        episode_files = [
+            f for f in os.listdir(series_folder_path)
+            if os.path.isfile(os.path.join(series_folder_path, f)) and is_episode_file(f)
+        ]
+        if not episode_files:
+            self.menu_system.show_error(f"No video files found in '{series_folder_path}'.")
+            return
+
+        series_name = self.menu_system.get_user_input("Enter the name for this series: ")
+        if not series_name:
+            self.menu_system.show_error("No series name provided.")
+            return
+
+        season_input = self.menu_system.get_user_input("Enter season number (leave empty for Season 01): ")
+        if not season_input:
+            season_number = 1
+        else:
+            try:
+                season_number = int(season_input)
+                if season_number <= 0:
+                    self.menu_system.show_error("Season number must be a positive integer.")
+                    return
+            except ValueError:
+                self.menu_system.show_error("Invalid season number.")
                 return
-            elif action_choice == 1:  # Overwrite
-                shutil.rmtree(existing_subfolder, ignore_errors=True)
-                clear_screen()
-                print(f"🗑️  Removed existing subfolder '{existing_subfolder}'.")
-            else:
-                self.menu_system.show_message("❌ Cancelled.")
-                return
-        
-        # Create new symlink
-        media_folder = get_media_folder(movie_path)
-        success, result = create_movie_symlink(movie_path, media_folder)
-        
+
+        success, result, episode_files_linked, extras_linked = create_series_symlinks(
+            series_folder_path, series_name, season_number
+        )
         if success:
             clear_screen()
-            print(f"✅ Success: Symlink created at '{result}'.")
-            print(f"🔗 The symlink points to: {movie_path}")
-            print("💡 The original file must remain in place for Jellyfin to access it.")
+            print(f"✅ Success: Series symlinks created at '{result}'.")
+            print(f"🔗 Main season contains {episode_files_linked} episode file symlinks")
+            if extras_linked > 0:
+                print(f"🎁 Extras linked: {extras_linked} video file(s) -> Season 00")
             wait_for_enter()
         else:
             clear_screen()
-            print(f"❌ Error creating symlink: {result}")
-            print("💡 Ensure script is run as administrator.")
+            print(f"❌ Error creating series symlink: {result}")
             wait_for_enter()
 
-    def _add_movie_via_download(self) -> None:
-        """Search and download movie torrents via qBittorrent search API."""
-        metadata = interactive_tmdb_movie_selection()
+    def _add_series_via_download(self) -> None:
+        """Search and download series torrents via qBittorrent search API."""
+        metadata = interactive_tmdb_series_selection()
         if not metadata:
-            self.menu_system.show_message("❌ No movie metadata selected or cancelled.")
+            self.menu_system.show_message("❌ No series metadata selected or cancelled.")
             return
 
         if not qb_check_connection():
@@ -152,7 +169,7 @@ class MovieManager:
         query = f"{metadata.get('title', '')} {metadata.get('year', '')}".strip()
         clear_screen()
         print(f"🔎 Searching qBittorrent for: {query}")
-        search_id = qb_start_search(session, query, category="movies", plugins="enabled")
+        search_id = qb_start_search(session, query, category="tv", plugins="enabled")
         if search_id is None:
             search_id = qb_start_search(session, query, category="all", plugins="enabled")
         if search_id is None:
@@ -162,10 +179,10 @@ class MovieManager:
         results = self._collect_search_results(session, search_id, query=query)
         qb_delete_search(session, search_id)
         if not results:
-            self.menu_system.show_message("No torrent results found for this movie.")
+            self.menu_system.show_message("No torrent results found for this series.")
             return
 
-        selected = self._select_search_result(results, f"🎬 Select torrent for '{metadata.get('title', 'Movie')}'")
+        selected = self._select_search_result(results, f"📺 Select torrent for '{metadata.get('title', 'Series')}'")
         if not selected:
             self.menu_system.show_message("❌ Cancelled.")
             return
@@ -304,14 +321,14 @@ class MovieManager:
             "download_path": download_path or "Default",
             "source_download_path": download_path or "Default",
             "library_path": "",
-            "media_type": "movie",
+            "media_type": "series",
             "media_metadata": metadata
         }
         torrent_id = add_torrent_to_database(torrent_info)
 
         clear_screen()
         print("✅ Torrent added successfully!")
-        print(f"🎬 Movie: {metadata.get('title', 'Unknown')}")
+        print(f"📺 Series: {metadata.get('title', 'Unknown')}")
         if torrent_id:
             print(f"🗃️  Database ID: #{torrent_id}")
         wait_for_enter()
@@ -319,12 +336,9 @@ class MovieManager:
     def _get_custom_download_path(self) -> Optional[str]:
         """Get custom download path from user."""
         download_path = get_download_path_with_custom_autocomplete()
-
         if not download_path or not download_path.strip():
             return None
-
         download_path = download_path.strip()
-
         if not os.path.isdir(download_path):
             print(f"⚠️  Directory '{download_path}' does not exist.")
             create_options = ["❌ Cancel download", "📁 Create directory", "📂 Use default location"]
@@ -333,7 +347,7 @@ class MovieManager:
             if create_choice == 0:
                 self.menu_system.show_message("❌ Download cancelled.")
                 return None
-            elif create_choice == 1:
+            if create_choice == 1:
                 try:
                     os.makedirs(download_path, exist_ok=True)
                     clear_screen()
@@ -342,86 +356,61 @@ class MovieManager:
                 except Exception as e:
                     self.menu_system.show_error(f"Failed to create directory: {e}")
                     return None
-            else:
-                return None
-
+            return None
         return download_path
-    
-    def remove_movie(self) -> None:
-        """Remove a movie from the library."""
-        movies = list_movies()
-        
-        if not movies:
-            self.menu_system.show_message("\n📁 No movies found in your Jellyfin library.")
+
+    def remove_series(self) -> None:
+        """Remove a series from the library."""
+        series_list = list_series()
+        if not series_list:
+            self.menu_system.show_message("\n📺 No series found in your library.")
             return
-        
-        # Create menu options
-        movie_options = []
-        for i, (name, symlink_path, target_path) in enumerate(movies, 1):
-            status = "❌ BROKEN" if target_path == "BROKEN LINK" else "✅ OK"
-            movie_options.append(f"{i:3d}. {name} {status}")
-        
-        movie_options.append("🔙 Back to main menu")
-        
-        # Navigate through movies
-        choice = self.menu_system.navigate_menu(movie_options, "🗑️  REMOVE MOVIE")
-        
-        if choice == -1 or choice == len(movies):  # Esc pressed or Back selected
+
+        options = []
+        for i, (series_name, seasons) in enumerate(series_list, 1):
+            options.append(f"{i:3d}. {series_name} ({len(seasons)} season(s))")
+        options.append("🔙 Back to main menu")
+
+        choice = self.menu_system.navigate_menu(options, "🗑️  REMOVE SERIES")
+        if choice == -1 or choice == len(options) - 1:
             return
-        
-        if 0 <= choice < len(movies):
-            movie_name, symlink_path, target_path = movies[choice]
-            
+
+        series_name, seasons = series_list[choice]
+        first_season_path = seasons[0][1]
+        series_main_folder = os.path.dirname(first_season_path)
+
+        if not self.menu_system.confirm_action(f"❓ Remove '{series_name}' from library?"):
+            self.menu_system.show_message("⏭️  Cancelled.")
+            return
+
+        if remove_symlink_safely(series_main_folder):
+            for torrent in get_tracked_torrents():
+                torrent_library_path = torrent.get("library_path", "")
+                if os.path.abspath(torrent_library_path) == os.path.abspath(series_main_folder):
+                    infohash = torrent.get("infohash")
+                    if infohash and infohash != "N/A":
+                        remove_torrent_from_database_by_infohash(infohash)
             clear_screen()
-            print(f"\n🎬 Selected: {movie_name}")
-            print(f"📍 Symlink: {symlink_path}")
-            if target_path != "BROKEN LINK":
-                print(f"🎬 Target: {target_path}")
-            
-            # Confirm removal
-            if not self.menu_system.confirm_action(f"❓ Remove '{movie_name}' from library?"):
-                self.menu_system.show_message("⏭️  Cancelled.")
-                return
-            
-            # Remove the subfolder (contains the symlink)
-            subfolder = os.path.dirname(symlink_path)
-            
-            if remove_symlink_safely(subfolder):
-                clear_screen()
-                print(f"✅ Removed movie '{movie_name}' from library.")
-                
-                # Ask about original file
-                if target_path != "BROKEN LINK" and os.path.exists(target_path):
-                    delete_options = ["❌ No, keep original file", "🗑️  Yes, delete original file"]
-                    delete_choice = self.menu_system.navigate_menu(delete_options, f"🗑️  Also delete '{target_path}'?")
-                    
-                    if delete_choice == 1:  # Yes, delete
-                        try:
-                            os.remove(target_path)
-                            clear_screen()
-                            print(f"🗑️  Deleted original file '{target_path}'.")
-                        except Exception as e:
-                            clear_screen()
-                            print(f"❌ Error deleting original file: {e}")
-                
-                wait_for_enter()
+            print(f"✅ Removed series '{series_name}' from library.")
+        else:
+            clear_screen()
+            print(f"❌ Failed to remove series '{series_name}'.")
+        wait_for_enter()
 
 
-# Global instance for backward compatibility
-_movie_manager = MovieManager()
+_series_manager = SeriesManager()
 
 
-# Legacy functions for backward compatibility
-def display_movies() -> None:
-    """Display all movies in the library. (Legacy function)"""
-    _movie_manager.display_movies()
+def display_series() -> None:
+    """Display all series in the library. (Legacy function)"""
+    _series_manager.display_series()
 
 
-def add_movie() -> None:
-    """Add a new movie to the library. (Legacy function)"""
-    _movie_manager.add_movie()
+def add_series() -> None:
+    """Add a new series to the library. (Legacy function)"""
+    _series_manager.add_series()
 
 
-def remove_movie() -> None:
-    """Remove a movie from the library. (Legacy function)"""
-    _movie_manager.remove_movie()
+def remove_series() -> None:
+    """Remove a series from the library. (Legacy function)"""
+    _series_manager.remove_series()

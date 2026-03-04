@@ -540,3 +540,14 @@ def get_download_path_with_custom_autocomplete() -> str:
         "📁 Download Location",
         "💡 Leave empty for default download location"
     )
+
+
+def get_series_folder_with_custom_autocomplete() -> str:
+    """Get series folder path using custom autocomplete system"""
+    autocomplete = CustomAutocomplete()
+
+    return autocomplete.get_input_with_autocomplete(
+        "Enter the path to the series episodes folder: ",
+        "➕ Add New Series",
+        "💡 Real-time suggestions appear as you type"
+    )

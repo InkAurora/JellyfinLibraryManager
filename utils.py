@@ -162,6 +162,12 @@ def get_anime_folder() -> str:
     return ANIME_FOLDER
 
 
+def get_series_folder() -> str:
+    """Get the series folder path."""
+    from config import SERIES_FOLDER
+    return SERIES_FOLDER
+
+
 def get_all_media_folders() -> list:
     """Get all media folders to search."""
     from config import MEDIA_FOLDERS

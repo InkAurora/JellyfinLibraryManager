@@ -1,6 +1,6 @@
 # 🎬 Jellyfin Library Manager
 
-A comprehensive media library management tool that automates the organization of movies and anime for Jellyfin media servers. This application provides seamless integration with qBittorrent for torrent management, AniList for anime metadata, and Nyaa.si for anime torrent discovery.
+A comprehensive media library management tool that automates the organization of movies, anime, and series for Jellyfin media servers. This application provides seamless integration with qBittorrent for torrent management/search, AniList for anime metadata, TMDB for movie/series metadata, and Nyaa.si for anime torrent discovery.
 
 ## ✨ Features
 
@@ -8,12 +8,14 @@ A comprehensive media library management tool that automates the organization of
 
 - **Movie Library**: Organize and manage movie collections with symlink support
 - **Anime Library**: Comprehensive anime management with season and episode tracking
+- **Series Library**: Season/episode cataloging with anime-style season structure
 - **Automatic File Organization**: Smart file detection and categorization
 - **Symlink Management**: Create and manage symbolic links for efficient storage
 
 ### 🔄 Torrent Integration
 
 - **qBittorrent Integration**: Direct API integration for torrent management
+- **qBittorrent Search API**: Built-in torrent search for movies and series
 - **Automatic Torrent Tracking**: Monitor download progress and completion status
 - **Background Monitoring**: Continuous tracking of active torrents
 - **Nyaa.si Search**: Built-in anime torrent search functionality
@@ -21,6 +23,7 @@ A comprehensive media library management tool that automates the organization of
 ### 📊 Metadata & Search
 
 - **AniList Integration**: Rich anime metadata and search capabilities
+- **TMDB Integration**: Movie/series metadata search and selection
 - **Interactive Search**: User-friendly search interface for anime discovery
 - **Real-time Updates**: Live torrent status and progress monitoring
 
@@ -46,12 +49,14 @@ This project follows a modular architecture with clear separation of concerns:
 
 - **`qbittorrent_api.py`** - qBittorrent Web API client
 - **`anilist_api.py`** - AniList GraphQL API integration
+- **`tmdb_api.py`** - TMDB API integration for movie/series metadata
 - **`nyaa_api.py`** - Nyaa.si RSS feed parser
 
 ### Media Management
 
 - **`movie_manager.py`** - Movie library operations
 - **`anime_manager.py`** - Anime library management
+- **`series_manager.py`** - Series library management
 - **`file_utils.py`** - File system operations and symlink handling
 
 ### Torrent Management
@@ -113,6 +118,10 @@ Core API and data modules are mostly platform-neutral, but menu/search/keyboard 
    # Media folder paths
    MEDIA_FOLDERS = [r"C:\Media", r"D:\Media"]  # Your movie directories
    ANIME_FOLDER = r"D:\Anime"                  # Your anime directory
+   SERIES_FOLDER = r"D:\Series"                # Your series directory
+
+   # TMDB settings (required for movie/series metadata search)
+   TMDB_API_KEY = "your_tmdb_api_key"
    ```
 
 4. **Run the application**
@@ -125,13 +134,12 @@ Core API and data modules are mostly platform-neutral, but menu/search/keyboard 
 ### Main Menu Options
 
 1. **📚 List movies in library** - View all movies in your media folders
-2. **➕ Add new movie to library** - Add movies with symlink creation
-3. **🗑️ Remove movie from library** - Remove movies and clean up symlinks
-4. **📺 List anime in library** - Browse your anime collection
-5. **➕ Add new anime to library** - Add anime with AniList integration
-6. **🗑️ Remove anime from library** - Remove anime and associated files
-7. **📋 View tracked torrents** - Monitor active torrent downloads
-8. **🚪 Exit** - Close the application
+2. **📺 List anime in library** - Browse your anime collection
+3. **📺 List series in library** - Browse your series collection
+4. **➕ Add new media** - Branch to add Anime, Movie, or Series
+5. **🗑️ Remove media** - Branch to remove Anime, Movie, or Series
+6. **📋 View tracked torrents** - Monitor active torrent downloads
+7. **🚪 Exit** - Close the application
 
 ### Navigation
 
@@ -173,12 +181,18 @@ Media/
 │   ├── Movie Title (Year)/
 │   │   └── movie_file.mkv
 │   └── ...
-└── Anime/
-    ├── Anime Title/
-    │   ├── Season 1/
-    │   │   ├── episode_01.mkv
-    │   │   └── ...
-    │   └── Season 2/
+├── Anime/
+│   ├── Anime Title/
+│   │   ├── Season 1/
+│   │   │   ├── episode_01.mkv
+│   │   │   └── ...
+│   │   └── Season 2/
+│   └── ...
+└── Series/
+    ├── Series Title/
+    │   ├── Season 01/
+    │   ├── Season 02/
+    │   └── Season 00/   # Specials/extras
     └── ...
 ```
 
@@ -252,11 +266,13 @@ jellyfin-library-manager/
 ├── API Integrations/
 │   ├── qbittorrent_api.py # qBittorrent client
 │   ├── anilist_api.py     # AniList integration
+│   ├── tmdb_api.py        # TMDB movie/series metadata
 │   └── nyaa_api.py        # Nyaa.si torrent search
 ├──
 ├── Media Management/
 │   ├── movie_manager.py   # Movie operations
 │   ├── anime_manager.py   # Anime operations
+│   ├── series_manager.py  # Series operations
 │   └── file_utils.py      # File system utilities
 └──
 └── Torrent Management/

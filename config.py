@@ -11,6 +11,12 @@ QBITTORRENT_PASSWORD = ""
 # Media folder paths
 MEDIA_FOLDERS = [r"C:\Media", r"D:\Media"]
 ANIME_FOLDER = r"D:\Anime"
+SERIES_FOLDER = r"D:\Series"
+
+# TMDB API configuration
+TMDB_API_KEY = ""
+TMDB_BASE_URL = "https://api.themoviedb.org/3"
+TMDB_LANGUAGE = "en-US"
 
 # ANSI color codes for console output
 class Colors:

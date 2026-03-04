@@ -7,7 +7,7 @@ import re
 from typing import List, Dict, Any, Tuple, Optional
 from qbittorrent_api import qb_check_connection, qb_login, qb_get_torrent_info
 from database import get_tracked_torrents, update_torrent_status, update_torrent_paths, remove_torrent_from_database_by_infohash
-from utils import is_episode_file, get_anime_folder
+from utils import is_episode_file, get_anime_folder, get_series_folder
 from file_utils import create_anime_symlinks
 from ffprobe_utils import probe_video_duration
 
@@ -82,13 +82,17 @@ class TorrentManager:
     def sort_torrent_files_for_jellyfin(self, torrent: Dict[str, Any], download_path: str) -> Optional[Dict[str, Any]]:
         """
         Sorts and organizes the torrent's files into a folder structure compatible with Jellyfin, using pattern matching and ffprobe.
-        Only the anime title is sanitized for forbidden characters.
+        Supports episodic anime and series media types.
         """
-        anilist_info = torrent.get('anilist_info', {})
-        anime_title = sanitize_filename(anilist_info.get('title', 'Unknown Anime'))
-        anime_base_folder = get_anime_folder()
-        anime_main_folder = os.path.join(anime_base_folder, anime_title)
-        file_structure = {'root': anime_main_folder, 'folders': []}
+        media_type = torrent.get("media_type", "anime")
+        media_metadata = torrent.get("media_metadata", torrent.get("anilist_info", {}))
+        media_title = sanitize_filename(media_metadata.get("title", "Unknown"))
+        if media_type == "series":
+            library_base_folder = get_series_folder()
+        else:
+            library_base_folder = get_anime_folder()
+        library_main_folder = os.path.join(library_base_folder, media_title)
+        file_structure = {'root': library_main_folder, 'folders': []}
         # Helper regexes
         season_regex = re.compile(r'(season[ _-]?(\d+)|s(\d{1,2}))(?!\d)', re.IGNORECASE)
         specials_regex = re.compile(r'(special|extra|ova|sp|nced|ncop|s00)', re.IGNORECASE)
@@ -104,9 +108,9 @@ class TorrentManager:
                 file_path = os.path.join(root, file)
                 # ffprobe: check if movie
                 duration = probe_video_duration(file_path)
-                # Files longer than 40 minutes go to Movies
-                if duration and duration > 40 * 60:
-                    movies_folder = os.path.join(anime_main_folder, 'Movies')
+                # For anime only: files longer than 40 minutes go to Movies
+                if media_type == "anime" and duration and duration > 40 * 60:
+                    movies_folder = os.path.join(library_main_folder, 'Movies')
                     folder_map.setdefault(movies_folder, []).append({'source': file_path, 'target': os.path.join(movies_folder, file)})
                     continue
                 # Find best matching folder for season/specials
@@ -114,22 +118,21 @@ class TorrentManager:
                 best_type = None
                 best_season = None
                 # Check all parent folders, deepest first
-                parts = rel_root.split(os.sep)
                 for i in range(len(rel_parts), 0, -1):
                     folder_name = rel_parts[i-1]
                     # Season
                     season_match = season_regex.search(folder_name)
                     if season_match:
-                        season_num = season_match.group(2) or season_match.group(3)
-                        if season_num:
-                            season_folder = os.path.join(anime_main_folder, f'Season {int(season_num):02d}')
-                            best_folder = season_folder
-                            best_type = 'season'
-                            best_season = int(season_num)
-                            break
+                            season_num = season_match.group(2) or season_match.group(3)
+                            if season_num:
+                                season_folder = os.path.join(library_main_folder, f'Season {int(season_num):02d}')
+                                best_folder = season_folder
+                                best_type = 'season'
+                                best_season = int(season_num)
+                                break
                     # Specials
                     if specials_regex.search(folder_name):
-                        specials_folder = os.path.join(anime_main_folder, 'Season 00')
+                        specials_folder = os.path.join(library_main_folder, 'Season 00')
                         best_folder = specials_folder
                         best_type = 'specials'
                         break
@@ -140,16 +143,16 @@ class TorrentManager:
                     if season_match:
                         season_num = season_match.group(2) or season_match.group(3)
                         if season_num:
-                            best_folder = os.path.join(anime_main_folder, f'Season {int(season_num):02d}')
+                            best_folder = os.path.join(library_main_folder, f'Season {int(season_num):02d}')
                             best_type = 'season'
                             best_season = int(season_num)
                     # Specials in file name
                     elif specials_regex.search(file):
-                        best_folder = os.path.join(anime_main_folder, 'Season 00')
+                        best_folder = os.path.join(library_main_folder, 'Season 00')
                         best_type = 'specials'
                 # Default to Season 01
                 if not best_folder:
-                    best_folder = os.path.join(anime_main_folder, 'Season 01')
+                    best_folder = os.path.join(library_main_folder, 'Season 01')
                     best_type = 'season'
                     best_season = 1
                 folder_map.setdefault(best_folder, []).append({'source': file_path, 'target': os.path.join(best_folder, file)})
@@ -159,7 +162,7 @@ class TorrentManager:
         return file_structure
 
     def add_completed_torrent_to_library(self, torrent: Dict[str, Any], download_path: str) -> bool:
-        """Add a completed torrent to the anime library using AniList info."""
+        """Add a completed episodic torrent to the library using media metadata."""
         try:
             file_structure = self.sort_torrent_files_for_jellyfin(torrent, download_path)
             if not file_structure:
@@ -186,13 +189,13 @@ class TorrentManager:
                 return False
             # Write tracking info to track.json in the anime main folder
             import json
-            anime_main_folder = file_structure['root']
-            track_path = os.path.join(anime_main_folder, "track.json")
+            media_main_folder = file_structure['root']
+            track_path = os.path.join(media_main_folder, "track.json")
             try:
                 track_torrent = torrent.copy()
                 track_torrent.setdefault("source_download_path", download_path)
                 track_torrent.setdefault("download_path", download_path)
-                track_torrent["library_path"] = anime_main_folder
+                track_torrent["library_path"] = media_main_folder
                 with open(track_path, "w", encoding="utf-8") as f:
                     json.dump(track_torrent, f, indent=2)
             except Exception as e:
@@ -220,14 +223,17 @@ class TorrentManager:
             if (torrent.get('found_in_qb') and 
                 torrent.get('qb_status') in completed_states and 
                 torrent.get('status') != 'added_to_library'):
-                
-                # Get AniList info for proper naming
-                anilist_info = torrent.get('anilist_info', {})
-                if not anilist_info.get('title'):
+
+                media_type = torrent.get("media_type", "anime")
+                if media_type not in ["anime", "series"]:
                     continue
-                
-                # Additional safety check - only process torrents that were added via this script
-                if not torrent.get('anilist_info'):
+
+                media_metadata = torrent.get("media_metadata", torrent.get("anilist_info", {}))
+                if not media_metadata.get('title'):
+                    continue
+
+                # Additional safety check - only process torrents with metadata payload
+                if not media_metadata:
                     continue
                 
                 # Get the download path from qBittorrent
@@ -250,9 +256,11 @@ class TorrentManager:
                 
                 if success:
                     completed_torrents.append(torrent)
-                    anilist_info = torrent.get('anilist_info', {})
-                    anime_title = sanitize_filename(anilist_info.get('title', 'Unknown Anime'))
-                    library_path = os.path.join(get_anime_folder(), anime_title)
+                    media_title = sanitize_filename(media_metadata.get('title', 'Unknown'))
+                    if media_type == "series":
+                        library_path = os.path.join(get_series_folder(), media_title)
+                    else:
+                        library_path = os.path.join(get_anime_folder(), media_title)
                     update_torrent_paths(torrent['id'], source_download_path=full_torrent_path, library_path=library_path)
                     # Update torrent status in database
                     update_torrent_status(torrent['id'], 'added_to_library')
@@ -263,13 +271,17 @@ class TorrentManager:
         """Remove torrent files/folders and database entry by infohash."""
         try:
             # Remove files/folders
-            anilist_info = torrent.get('anilist_info', {})
-            anime_title = sanitize_filename(anilist_info.get('title', 'Unknown Anime'))
-            anime_base_folder = get_anime_folder()
-            anime_main_folder = os.path.join(anime_base_folder, anime_title)
-            if os.path.exists(anime_main_folder):
+            media_type = torrent.get("media_type", "anime")
+            media_metadata = torrent.get("media_metadata", torrent.get("anilist_info", {}))
+            media_title = sanitize_filename(media_metadata.get("title", "Unknown"))
+            if media_type == "series":
+                library_base_folder = get_series_folder()
+            else:
+                library_base_folder = get_anime_folder()
+            media_main_folder = os.path.join(library_base_folder, media_title)
+            if os.path.exists(media_main_folder):
                 import shutil
-                shutil.rmtree(anime_main_folder, ignore_errors=True)
+                shutil.rmtree(media_main_folder, ignore_errors=True)
             # Remove from database
             infohash = torrent.get('infohash')
             if infohash:

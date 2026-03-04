@@ -7,11 +7,35 @@ import json
 import threading
 from datetime import datetime
 from typing import Dict, List, Optional, Any
-from config import NOTIFICATION_RETENTION_HOURS
-from utils import get_anime_folder
+from config import NOTIFICATION_RETENTION_HOURS, ANIME_FOLDER, SERIES_FOLDER, MEDIA_FOLDERS
 
 
 _db_file_lock = threading.RLock()
+
+
+def _get_storage_base_folder() -> str:
+    """Get a writable base folder for database/notification storage."""
+    candidates: List[str] = []
+
+    if isinstance(ANIME_FOLDER, str) and ANIME_FOLDER.strip():
+        candidates.append(ANIME_FOLDER)
+    if isinstance(SERIES_FOLDER, str) and SERIES_FOLDER.strip():
+        candidates.append(SERIES_FOLDER)
+    if isinstance(MEDIA_FOLDERS, (list, tuple)):
+        candidates.extend(folder for folder in MEDIA_FOLDERS if isinstance(folder, str) and folder.strip())
+
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates.append(app_dir)
+
+    for candidate in candidates:
+        try:
+            resolved_path = os.path.abspath(candidate)
+            os.makedirs(resolved_path, exist_ok=True)
+            return resolved_path
+        except OSError:
+            continue
+
+    return app_dir
 
 
 class TorrentDatabase:
@@ -22,8 +46,7 @@ class TorrentDatabase:
     
     def _get_default_db_path(self) -> str:
         """Get the default path to the torrent database file."""
-        anime_folder = get_anime_folder()
-        return os.path.join(anime_folder, "torrent_database.json")
+        return os.path.join(_get_storage_base_folder(), "torrent_database.json")
 
     def _get_next_torrent_id(self, torrents: List[Dict[str, Any]]) -> int:
         """Get the next monotonic torrent ID."""
@@ -53,7 +76,7 @@ class TorrentDatabase:
         """Save the torrent database to file."""
         with _db_file_lock:
             try:
-                # Ensure the anime folder exists
+                # Ensure the database folder exists
                 os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
                 
                 db_data["last_updated"] = datetime.now().isoformat()
@@ -71,6 +94,13 @@ class TorrentDatabase:
             next_torrent_id = self._get_next_torrent_id(db_data.get("torrents", []))
             source_download_path = torrent_info.get("source_download_path", torrent_info.get("download_path", "Default"))
             library_path = torrent_info.get("library_path", "")
+            media_type = torrent_info.get("media_type")
+            if not media_type:
+                media_type = "anime" if torrent_info.get("anilist_info") else "unknown"
+            media_metadata = torrent_info.get("media_metadata", torrent_info.get("anilist_info", {}))
+            anilist_info = torrent_info.get("anilist_info")
+            if anilist_info is None:
+                anilist_info = media_metadata if media_type == "anime" else {}
             
             # Create torrent entry
             torrent_entry = {
@@ -86,9 +116,11 @@ class TorrentDatabase:
                 "source_download_path": source_download_path,
                 "library_path": library_path,
                 "download_path": source_download_path,
+                "media_type": media_type,
+                "media_metadata": media_metadata,
                 "added_date": datetime.now().isoformat(),
                 "status": "added",
-                "anilist_info": torrent_info.get("anilist_info", {})
+                "anilist_info": anilist_info
             }
             
             db_data["torrents"].append(torrent_entry)
@@ -159,8 +191,7 @@ class NotificationManager:
     
     def _get_default_notifications_path(self) -> str:
         """Get the default path to the notifications file."""
-        anime_folder = get_anime_folder()
-        return os.path.join(anime_folder, "torrent_notifications.json")
+        return os.path.join(_get_storage_base_folder(), "torrent_notifications.json")
     
     def save_completion_notifications(self, completed_torrents: List[Dict[str, Any]]) -> None:
         """Save notification about completed torrents for later display."""
@@ -177,15 +208,24 @@ class NotificationManager:
                 
                 # Add new notifications
                 for torrent in completed_torrents:
-                    anilist_info = torrent.get('anilist_info', {})
-                    anime_title = anilist_info.get('title', 'Unknown Anime')
+                    media_type = torrent.get("media_type", "anime")
+                    media_metadata = torrent.get("media_metadata", torrent.get("anilist_info", {}))
+                    media_title = media_metadata.get("title", torrent.get("title", "Unknown"))
+                    if media_type == "series":
+                        message = f"'{media_title}' has been automatically added to your series library!"
+                    elif media_type == "movie":
+                        message = f"'{media_title}' has been automatically added to your movie library!"
+                    else:
+                        message = f"'{media_title}' has been automatically added to your anime library!"
                     
                     notification = {
                         'timestamp': datetime.now().timestamp(),
-                        'anime_title': anime_title,
+                        'anime_title': media_title,  # Backward compatibility key
+                        'media_title': media_title,
+                        'media_type': media_type,
                         'torrent_title': torrent.get('title', 'Unknown'),
                         'torrent_id': torrent.get('id'),
-                        'message': f"'{anime_title}' has been automatically added to your anime library!"
+                        'message': message
                     }
                     notifications.append(notification)
                 

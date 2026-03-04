@@ -6,7 +6,7 @@ import os
 import glob
 import shutil
 from typing import List, Tuple, Optional
-from utils import is_video_file, get_all_media_folders, get_anime_folder
+from utils import is_video_file, get_all_media_folders, get_anime_folder, get_series_folder
 from config import JELLYFIN_CLEANUP_EXTENSIONS
 
 
@@ -117,6 +117,54 @@ def list_anime() -> List[Tuple[str, List[Tuple[str, str, str]]]]:
     
     # Convert to sorted list
     return sorted(anime_dict.items(), key=lambda x: x[0].lower())
+
+
+def list_series() -> List[Tuple[str, List[Tuple[str, str, str]]]]:
+    """List all series in the library grouped by series name."""
+    series_dict = {}
+    series_folder = get_series_folder()
+
+    if not os.path.exists(series_folder):
+        return []
+
+    for series_name in os.listdir(series_folder):
+        series_path = os.path.join(series_folder, series_name)
+        if os.path.isdir(series_path) and not os.path.islink(series_path):
+            seasons = []
+
+            for item in os.listdir(series_path):
+                item_path = os.path.join(series_path, item)
+                if os.path.isdir(item_path) and item.startswith("Season "):
+                    try:
+                        season_contents = os.listdir(item_path)
+                        if season_contents:
+                            found_symlink = False
+                            target = None
+                            for content_item in season_contents:
+                                content_item_path = os.path.join(item_path, content_item)
+                                if os.path.islink(content_item_path):
+                                    try:
+                                        target = os.readlink(content_item_path)
+                                        if is_video_file(target):
+                                            target = os.path.dirname(target)
+                                        found_symlink = True
+                                        break
+                                    except OSError:
+                                        continue
+                            if found_symlink:
+                                seasons.append((item, item_path, target))
+                            else:
+                                seasons.append((item, item_path, "NO_SYMLINKS"))
+                        else:
+                            seasons.append((item, item_path, "EMPTY"))
+                    except PermissionError:
+                        seasons.append((item, item_path, "ACCESS DENIED"))
+
+            if seasons:
+                seasons.sort(key=lambda x: x[0])
+                series_dict[series_name] = seasons
+
+    return sorted(series_dict.items(), key=lambda x: x[0].lower())
 
 
 def cleanup_jellyfin_files(target_path: str) -> None:
@@ -233,6 +281,65 @@ def create_anime_symlinks(anime_folder_path: str, anime_name: str, season_number
         
         return True, season_folder, episode_files_linked, extras_linked
         
+    except Exception as e:
+        return False, str(e), 0, 0
+
+
+def create_series_symlinks(series_folder_path: str, series_name: str, season_number: int) -> Tuple[bool, str, int, int]:
+    """Create symlinks for a TV series."""
+    try:
+        episode_files = [f for f in os.listdir(series_folder_path)
+                        if os.path.isfile(os.path.join(series_folder_path, f)) and is_video_file(f)]
+
+        if not episode_files:
+            return False, f"No video files found in '{series_folder_path}'", 0, 0
+
+        extras_folders = []
+        for item in os.listdir(series_folder_path):
+            item_path = os.path.join(series_folder_path, item)
+            if os.path.isdir(item_path):
+                video_files_in_subfolder = [f for f in os.listdir(item_path)
+                                          if os.path.isfile(os.path.join(item_path, f)) and is_video_file(f)]
+                if video_files_in_subfolder:
+                    extras_folders.append((item, item_path, len(video_files_in_subfolder)))
+
+        series_base_folder = get_series_folder()
+        series_main_folder = os.path.join(series_base_folder, series_name)
+        season_str = f"{season_number:02d}"
+        season_folder = os.path.join(series_main_folder, f"Season {season_str}")
+
+        os.makedirs(season_folder, exist_ok=True)
+
+        episode_files_linked = 0
+        for episode_file in episode_files:
+            source_file = os.path.join(series_folder_path, episode_file)
+            target_file = os.path.join(season_folder, episode_file)
+            try:
+                os.symlink(source_file, target_file)
+                episode_files_linked += 1
+            except Exception as e:
+                print(f"⚠️  Warning: Could not create symlink for episode '{episode_file}': {e}")
+
+        extras_linked = 0
+        for folder_name, folder_path, _ in extras_folders:
+            extras_season_folder = os.path.join(series_main_folder, "Season 00")
+            try:
+                os.makedirs(extras_season_folder, exist_ok=True)
+                video_files = [f for f in os.listdir(folder_path)
+                             if os.path.isfile(os.path.join(folder_path, f)) and is_video_file(f)]
+                for video_file in video_files:
+                    source_file = os.path.join(folder_path, video_file)
+                    target_filename = f"{folder_name} - {video_file}"
+                    extras_symlink = os.path.join(extras_season_folder, target_filename)
+                    try:
+                        os.symlink(source_file, extras_symlink)
+                        extras_linked += 1
+                    except Exception as e:
+                        print(f"⚠️  Warning: Could not create symlink for '{video_file}': {e}")
+            except Exception as e:
+                print(f"⚠️  Warning: Could not process extras folder '{folder_name}': {e}")
+
+        return True, season_folder, episode_files_linked, extras_linked
     except Exception as e:
         return False, str(e), 0, 0
 
