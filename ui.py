@@ -5,6 +5,7 @@ User interface and menu system for the Jellyfin Library Manager.
 import os
 import msvcrt
 import sys
+import shutil
 from typing import List, Optional, Callable, Any, Dict, Union
 from config import APP_TITLE
 from utils import clear_screen, wait_for_enter, is_video_file
@@ -47,6 +48,25 @@ def show_directory_hint(current_path: str) -> None:
 
 class MenuSystem:
     """Class to handle menu navigation and user interface."""
+
+    @staticmethod
+    def _get_terminal_width(default: int = 120) -> int:
+        """Get current terminal width with safe fallback."""
+        try:
+            return max(40, int(shutil.get_terminal_size(fallback=(default, 24)).columns))
+        except Exception:
+            return default
+
+    @staticmethod
+    def _truncate_for_width(text: str, max_width: int) -> str:
+        """Truncate text to fit max width, adding ellipsis when needed."""
+        if max_width <= 0:
+            return ""
+        if len(text) <= max_width:
+            return text
+        if max_width <= 3:
+            return "." * max_width
+        return text[:max_width - 3] + "..."
     
     @staticmethod
     def display_menu_with_selection(options: List[str], selected_index: int, title: str = APP_TITLE) -> None:
@@ -198,12 +218,14 @@ class MenuSystem:
         while True:
             visible_indices = _build_visible()
             visible_count = len(visible_indices)
+            term_width = MenuSystem._get_terminal_width()
+            line_width = min(term_width, 140)
 
             if visible_count == 0:
                 clear_screen()
-                print("=" * 90)
+                print("=" * line_width)
                 print(title)
-                print("=" * 90)
+                print("=" * line_width)
                 print("No results match the current filter.")
                 print("💡 Press D to show zero-seed results again, S to change sort mode, Esc to cancel.")
                 if extra_hint:
@@ -232,22 +254,26 @@ class MenuSystem:
             top_index = max(0, min(top_index, max(0, visible_count - page_size)))
 
             clear_screen()
-            print("=" * 90)
+            print("=" * line_width)
             print(title)
-            print("=" * 90)
+            print("=" * line_width)
             sort_label = "Seeds DESC" if sort_mode == "seeds_desc" else "Size DESC"
             zero_seed_label = "Hidden" if hide_zero_seed else "Shown"
             start = top_index
             end = min(top_index + page_size, visible_count)
             print(f"Showing {start + 1}-{end} of {visible_count} (Total: {len(items)}) | Sort: {sort_label} | Zero-seed: {zero_seed_label}")
-            print("-" * 90)
+            print("-" * line_width)
 
             for visible_i in range(start, end):
                 original_i = visible_indices[visible_i]
                 marker = "➤" if original_i == selected_original_index else " "
-                print(f"{marker} {visible_i + 1:>3}. {row_formatter(items[original_i])}")
+                prefix = f"{marker} {visible_i + 1:>3}. "
+                row_text = str(row_formatter(items[original_i]))
+                available = max(10, term_width - len(prefix) - 1)
+                safe_text = MenuSystem._truncate_for_width(row_text, available)
+                print(f"{prefix}{safe_text}")
 
-            print("-" * 90)
+            print("-" * line_width)
             print("💡 ↑↓ move | PgUp/PgDn page | Home/End jump | S sort | D hide/show 0 seeds | Enter select | Esc back")
             if extra_hint:
                 print(extra_hint)
@@ -273,6 +299,8 @@ class MenuSystem:
                 selected_original_index = visible_indices[current_pos]
             elif lowered == b's':
                 sort_mode = "size_desc" if sort_mode == "seeds_desc" else "seeds_desc"
+                selected_original_index = -1
+                top_index = 0
             elif lowered == b'd':
                 hide_zero_seed = not hide_zero_seed
             elif key == b'\r':
