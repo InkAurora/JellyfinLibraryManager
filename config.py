@@ -13,10 +13,13 @@ MEDIA_FOLDERS = [r"C:\Media", r"D:\Media"]
 ANIME_FOLDER = r"D:\Anime"
 SERIES_FOLDER = r"D:\Series"
 
-# TMDB API configuration
-TMDB_API_KEY = ""
-TMDB_BASE_URL = "https://api.themoviedb.org/3"
-TMDB_LANGUAGE = "en-US"
+# Metadata provider configuration
+# Supported: "imdb"
+METADATA_PROVIDER = "imdb"
+
+# IMDb integration (API-key-less)
+IMDB_FIND_BASE_URL = "https://www.imdb.com/find/"
+IMDB_SUGGEST_BASE_URL = "https://v2.sg.media-imdb.com/suggestion"
 
 # ANSI color codes for console output
 class Colors:

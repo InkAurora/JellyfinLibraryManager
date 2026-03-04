@@ -5,6 +5,8 @@ Movie management module for the Jellyfin Library Manager.
 import os
 import shutil
 import time
+import msvcrt
+from urllib.parse import urlparse
 from typing import List, Tuple, Dict, Any, Optional
 from config import Colors
 from utils import clear_screen, wait_for_enter, get_media_folder, validate_video_file, format_bytes
@@ -13,10 +15,10 @@ from file_utils import find_existing_symlink, list_movies, create_movie_symlink,
 from custom_autocomplete import get_movie_file_with_custom_autocomplete, get_download_path_with_custom_autocomplete
 from qbittorrent_api import (
     qb_check_connection, qb_login, qb_add_torrent, qb_get_search_plugins,
-    qb_start_search, qb_get_search_status, qb_get_search_results, qb_delete_search
+    qb_start_search, qb_get_search_status, qb_get_search_results, qb_delete_search, qb_get_torrent_info
 )
 from database import add_torrent_to_database
-from tmdb_api import interactive_tmdb_movie_selection
+from imdb_api import interactive_imdb_movie_selection
 
 
 class MovieManager:
@@ -127,7 +129,7 @@ class MovieManager:
 
     def _add_movie_via_download(self) -> None:
         """Search and download movie torrents via qBittorrent search API."""
-        metadata = interactive_tmdb_movie_selection()
+        metadata = interactive_imdb_movie_selection()
         if not metadata:
             self.menu_system.show_message("❌ No movie metadata selected or cancelled.")
             return
@@ -177,7 +179,8 @@ class MovieManager:
         clear_screen()
         print(f"🔎 Searching qBittorrent for: {query}")
         print(f"⏳ Status: {status.upper()} | Elapsed: {elapsed}s/{wait_seconds}s | Results: {len(results)}")
-        print("💡 Results update live while search is running.\n")
+        print("💡 Results update live while search is running.")
+        print("💡 Press Esc to stop waiting and show current results.\n")
 
         if not results:
             print("No results yet...")
@@ -234,7 +237,19 @@ class MovieManager:
             if not status_items and not best_results and elapsed >= 12:
                 break
 
-            time.sleep(1)
+            # Sleep in short slices so Esc can cancel promptly.
+            cancel_requested = False
+            for _ in range(10):
+                if msvcrt.kbhit():
+                    key = msvcrt.getch()
+                    if key in (b'\x00', b'\xe0') and msvcrt.kbhit():
+                        msvcrt.getch()  # consume multi-byte key suffix
+                    elif key == b'\x1b':  # Esc
+                        cancel_requested = True
+                        break
+                time.sleep(0.1)
+            if cancel_requested:
+                break
             elapsed += 1
 
         self._show_search_progress(query, status, best_results, elapsed, wait_seconds)
@@ -312,14 +327,15 @@ class MovieManager:
             self.menu_system.show_error("Failed to add torrent to qBittorrent.")
             return
 
+        infohash, source_category = self._resolve_torrent_identity(session, selected, torrent_link)
         torrent_info = {
             "title": name,
             "size": str(selected.get("fileSize", "Unknown")),
             "seeds": int(selected.get("nbSeeders", 0) or 0),
             "leechers": int(selected.get("nbLeechers", 0) or 0),
             "downloads": int(selected.get("nbDownloads", 0) or 0),
-            "infohash": selected.get("fileHash", "N/A"),
-            "category": selected.get("siteUrl", "qBittorrent Search"),
+            "infohash": infohash,
+            "category": source_category,
             "link": torrent_link,
             "download_path": download_path or "Default",
             "source_download_path": download_path or "Default",
@@ -335,6 +351,66 @@ class MovieManager:
         if torrent_id:
             print(f"🗃️  Database ID: #{torrent_id}")
         wait_for_enter()
+
+    def _resolve_torrent_identity(self, session, selected: Dict[str, Any], torrent_link: str) -> Tuple[str, str]:
+        """Resolve stable infohash and normalized source category for DB storage."""
+        direct_hash = str(
+            selected.get("fileHash")
+            or selected.get("infohash")
+            or selected.get("hash")
+            or ""
+        ).strip()
+        infohash = direct_hash if direct_hash and direct_hash.upper() != "N/A" else "N/A"
+
+        site_url = str(selected.get("siteUrl") or selected.get("descrLink") or selected.get("fileUrl") or "").strip()
+        if site_url:
+            parsed = urlparse(site_url)
+            host = parsed.netloc.lower()
+            if host.startswith("www."):
+                host = host[4:]
+            category = host or "qBittorrent Search"
+        else:
+            category = "qBittorrent Search"
+
+        if infohash != "N/A":
+            return infohash, category
+
+        candidate_name = str(selected.get("fileName", "") or "").strip().lower()
+        candidate_links = {
+            str(torrent_link or "").strip(),
+            str(selected.get("fileUrl", "") or "").strip(),
+            str(selected.get("descrLink", "") or "").strip()
+        }
+        candidate_links = {c for c in candidate_links if c}
+
+        # qB can take a moment before the newly added torrent appears in /torrents/info.
+        for _ in range(10):
+            torrents = qb_get_torrent_info(session)
+            if torrents:
+                # Strong match: URL appears in magnet/comment fields.
+                for torrent in torrents:
+                    torrent_hash = str(torrent.get("hash", "") or "").strip()
+                    if not torrent_hash:
+                        continue
+                    magnet = str(torrent.get("magnet_uri", "") or "")
+                    comment = str(torrent.get("comment", "") or "")
+                    blob = f"{magnet}\n{comment}"
+                    if any(link in blob for link in candidate_links):
+                        return torrent_hash, category
+
+                # Fallback: exact name match.
+                name_matches = []
+                if candidate_name:
+                    for torrent in torrents:
+                        torrent_name = str(torrent.get("name", "") or "").strip().lower()
+                        torrent_hash = str(torrent.get("hash", "") or "").strip()
+                        if torrent_hash and torrent_name == candidate_name:
+                            name_matches.append(torrent_hash)
+                    if len(name_matches) == 1:
+                        return name_matches[0], category
+            time.sleep(0.3)
+
+        return "N/A", category
 
     def _get_custom_download_path(self) -> Optional[str]:
         """Get custom download path from user."""

@@ -1,6 +1,6 @@
 # 🎬 Jellyfin Library Manager
 
-A comprehensive media library management tool that automates the organization of movies, anime, and series for Jellyfin media servers. This application provides seamless integration with qBittorrent for torrent management/search, AniList for anime metadata, TMDB for movie/series metadata, and Nyaa.si for anime torrent discovery.
+A comprehensive media library management tool that automates the organization of movies, anime, and series for Jellyfin media servers. This application provides seamless integration with qBittorrent for torrent management/search, AniList for anime metadata, IMDb for movie/series metadata, and Nyaa.si for anime torrent discovery.
 
 ## ✨ Features
 
@@ -23,7 +23,7 @@ A comprehensive media library management tool that automates the organization of
 ### 📊 Metadata & Search
 
 - **AniList Integration**: Rich anime metadata and search capabilities
-- **TMDB Integration**: Movie/series metadata search and selection
+- **IMDb Integration**: Movie/series metadata search and selection (API-key-less)
 - **Interactive Search**: User-friendly search interface for anime discovery
 - **Real-time Updates**: Live torrent status and progress monitoring
 
@@ -49,7 +49,7 @@ This project follows a modular architecture with clear separation of concerns:
 
 - **`qbittorrent_api.py`** - qBittorrent Web API client
 - **`anilist_api.py`** - AniList GraphQL API integration
-- **`tmdb_api.py`** - TMDB API integration for movie/series metadata
+- **`imdb_api.py`** - IMDb metadata integration for movie/series metadata
 - **`nyaa_api.py`** - Nyaa.si RSS feed parser
 
 ### Media Management
@@ -120,8 +120,8 @@ Core API and data modules are mostly platform-neutral, but menu/search/keyboard 
    ANIME_FOLDER = r"D:\Anime"                  # Your anime directory
    SERIES_FOLDER = r"D:\Series"                # Your series directory
 
-   # TMDB settings (required for movie/series metadata search)
-   TMDB_API_KEY = "your_tmdb_api_key"
+   # Metadata provider
+   METADATA_PROVIDER = "imdb"
    ```
 
 4. **Run the application**
@@ -266,7 +266,7 @@ jellyfin-library-manager/
 ├── API Integrations/
 │   ├── qbittorrent_api.py # qBittorrent client
 │   ├── anilist_api.py     # AniList integration
-│   ├── tmdb_api.py        # TMDB movie/series metadata
+│   ├── imdb_api.py        # IMDb movie/series metadata
 │   └── nyaa_api.py        # Nyaa.si torrent search
 ├──
 ├── Media Management/
