@@ -2,13 +2,14 @@
 Torrent management module for the Jellyfin Library Manager.
 """
 
+import json
 import os
 import re
 from typing import List, Dict, Any, Tuple, Optional
 from qbittorrent_api import qb_check_connection, qb_login, qb_get_torrent_info
 from database import get_tracked_torrents, update_torrent_status, update_torrent_paths, remove_torrent_from_database_by_infohash
-from utils import is_episode_file, get_anime_folder, get_series_folder
-from file_utils import create_anime_symlinks
+from utils import is_episode_file, is_video_file, get_anime_folder, get_series_folder, get_media_folder
+from file_utils import create_movie_symlink
 from ffprobe_utils import probe_video_duration
 
 
@@ -23,6 +24,105 @@ class TorrentManager:
     
     def __init__(self):
         pass
+
+    def _write_tracking_file(self, torrent: Dict[str, Any], download_path: str, library_path: str) -> None:
+        """Persist track.json for a completed torrent library entry."""
+        track_path = os.path.join(library_path, "track.json")
+        try:
+            track_torrent = torrent.copy()
+            track_torrent["source_download_path"] = download_path
+            track_torrent["download_path"] = download_path
+            track_torrent["library_path"] = library_path
+            with open(track_path, "w", encoding="utf-8") as file_handle:
+                json.dump(track_torrent, file_handle, indent=2)
+        except Exception as e:
+            print(f"⚠️  Warning: Could not save tracking info: {e}")
+
+    def _collect_video_files(self, download_path: str) -> List[str]:
+        """Collect video files from a completed torrent path."""
+        if os.path.isfile(download_path):
+            return [download_path] if is_video_file(download_path) else []
+
+        if not os.path.isdir(download_path):
+            return []
+
+        video_files = []
+        for root, _, files in os.walk(download_path):
+            for file_name in files:
+                file_path = os.path.join(root, file_name)
+                if is_video_file(file_path):
+                    video_files.append(file_path)
+        return video_files
+
+    def _get_movie_candidate_sort_key(self, file_path: str, download_path: str) -> Tuple[int, int, int, int, str]:
+        """Build a deterministic sort key for selecting a primary movie file."""
+        file_name = os.path.basename(file_path).lower()
+        if os.path.isdir(download_path):
+            rel_path = os.path.relpath(file_path, download_path)
+            depth = max(0, rel_path.count(os.sep))
+        else:
+            depth = 0
+
+        extra_pattern = re.compile(
+            r'(^|[\W_])(sample|trailer|teaser|featurette|extras?|behind[\W_]*the[\W_]*scenes|interview|deleted[\W_]*scenes?|clip|preview)([\W_]|$)',
+            re.IGNORECASE,
+        )
+        is_extra = 1 if extra_pattern.search(file_name) else 0
+
+        try:
+            file_size = os.path.getsize(file_path)
+        except OSError:
+            file_size = 0
+
+        ext = os.path.splitext(file_name)[1]
+        ext_rank = {'.mkv': 0, '.mp4': 1, '.avi': 2}.get(ext, 3)
+        return (is_extra, depth, -file_size, ext_rank, file_name)
+
+    def _select_primary_movie_file(self, download_path: str) -> Optional[str]:
+        """Select the most likely main movie file from a completed torrent."""
+        video_files = self._collect_video_files(download_path)
+        if not video_files:
+            return None
+        return min(video_files, key=lambda file_path: self._get_movie_candidate_sort_key(file_path, download_path))
+
+    def add_completed_movie_to_library(self, torrent: Dict[str, Any], download_path: str) -> Optional[str]:
+        """Add a completed movie torrent to the movie library and return its library folder."""
+        try:
+            movie_file = self._select_primary_movie_file(download_path)
+            if not movie_file:
+                print(f"⚠️  Warning: No movie file found for completed torrent '{torrent.get('title', 'Unknown')}'.")
+                return None
+
+            media_folder = get_media_folder(movie_file)
+            movie_name = os.path.splitext(os.path.basename(movie_file))[0]
+            movie_folder = os.path.join(media_folder, movie_name)
+            symlink_path = os.path.join(movie_folder, os.path.basename(movie_file))
+
+            if os.path.exists(symlink_path):
+                if not os.path.islink(symlink_path):
+                    print(f"⚠️  Warning: Existing movie library entry is not a symlink: '{symlink_path}'.")
+                    return None
+                try:
+                    existing_target = os.readlink(symlink_path)
+                except OSError as e:
+                    print(f"⚠️  Warning: Could not inspect existing movie symlink '{symlink_path}': {e}")
+                    return None
+                if os.path.abspath(existing_target) != os.path.abspath(movie_file):
+                    print(f"⚠️  Warning: Existing movie symlink points to a different file: '{symlink_path}'.")
+                    return None
+            else:
+                success, result = create_movie_symlink(movie_file, media_folder)
+                if not success:
+                    print(f"⚠️  Warning: Could not create movie symlink for '{movie_file}': {result}")
+                    return None
+                symlink_path = result
+                movie_folder = os.path.dirname(result)
+
+            self._write_tracking_file(torrent, download_path, movie_folder)
+            return movie_folder
+        except Exception as e:
+            print(f"❌ Error adding completed movie torrent to library: {e}")
+            return None
     
     def sync_torrents_with_qbittorrent(self) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
         """Sync tracked torrents with current qBittorrent status."""
@@ -187,26 +287,15 @@ class TorrentManager:
             if linked_or_existing_files == 0:
                 print("⚠️  Warning: No media files were linked to the library.")
                 return False
-            # Write tracking info to track.json in the anime main folder
-            import json
             media_main_folder = file_structure['root']
-            track_path = os.path.join(media_main_folder, "track.json")
-            try:
-                track_torrent = torrent.copy()
-                track_torrent.setdefault("source_download_path", download_path)
-                track_torrent.setdefault("download_path", download_path)
-                track_torrent["library_path"] = media_main_folder
-                with open(track_path, "w", encoding="utf-8") as f:
-                    json.dump(track_torrent, f, indent=2)
-            except Exception as e:
-                print(f"⚠️  Warning: Could not save tracking info: {e}")
+            self._write_tracking_file(torrent, download_path, media_main_folder)
             return True
         except Exception as e:
             print(f"❌ Error adding completed torrent to library: {e}")
             return False
     
     def auto_add_completed_torrents(self) -> List[Dict[str, Any]]:
-        """Check for completed torrents and automatically add them to the anime library."""
+        """Check for completed torrents and automatically add them to the library."""
         # Get tracked torrents with qBittorrent sync
         synced_torrents, error = self.sync_torrents_with_qbittorrent()
         
@@ -225,7 +314,7 @@ class TorrentManager:
                 torrent.get('status') != 'added_to_library'):
 
                 media_type = torrent.get("media_type", "anime")
-                if media_type not in ["anime", "series"]:
+                if media_type not in ["anime", "series", "movie"]:
                     continue
 
                 media_metadata = torrent.get("media_metadata", torrent.get("anilist_info", {}))
@@ -252,15 +341,23 @@ class TorrentManager:
                     continue
                 
                 # Try to add to library
-                success = self.add_completed_torrent_to_library(torrent, full_torrent_path)
+                library_path = ""
+                if media_type == "movie":
+                    movie_library_path = self.add_completed_movie_to_library(torrent, full_torrent_path)
+                    success = movie_library_path is not None
+                    if movie_library_path:
+                        library_path = movie_library_path
+                else:
+                    success = self.add_completed_torrent_to_library(torrent, full_torrent_path)
+                    if success:
+                        media_title = sanitize_filename(media_metadata.get('title', 'Unknown'))
+                        if media_type == "series":
+                            library_path = os.path.join(get_series_folder(), media_title)
+                        else:
+                            library_path = os.path.join(get_anime_folder(), media_title)
                 
                 if success:
                     completed_torrents.append(torrent)
-                    media_title = sanitize_filename(media_metadata.get('title', 'Unknown'))
-                    if media_type == "series":
-                        library_path = os.path.join(get_series_folder(), media_title)
-                    else:
-                        library_path = os.path.join(get_anime_folder(), media_title)
                     update_torrent_paths(torrent['id'], source_download_path=full_torrent_path, library_path=library_path)
                     # Update torrent status in database
                     update_torrent_status(torrent['id'], 'added_to_library')
@@ -270,18 +367,26 @@ class TorrentManager:
     def remove_torrent_and_library_entry(self, torrent: Dict[str, Any]) -> bool:
         """Remove torrent files/folders and database entry by infohash."""
         try:
-            # Remove files/folders
-            media_type = torrent.get("media_type", "anime")
-            media_metadata = torrent.get("media_metadata", torrent.get("anilist_info", {}))
-            media_title = sanitize_filename(media_metadata.get("title", "Unknown"))
-            if media_type == "series":
-                library_base_folder = get_series_folder()
-            else:
-                library_base_folder = get_anime_folder()
-            media_main_folder = os.path.join(library_base_folder, media_title)
-            if os.path.exists(media_main_folder):
+            library_path = torrent.get("library_path", "")
+            if library_path and os.path.exists(library_path):
                 import shutil
-                shutil.rmtree(media_main_folder, ignore_errors=True)
+                shutil.rmtree(library_path, ignore_errors=True)
+            elif not library_path:
+                media_type = torrent.get("media_type", "anime")
+                media_metadata = torrent.get("media_metadata", torrent.get("anilist_info", {}))
+                media_title = sanitize_filename(media_metadata.get("title", "Unknown"))
+                if media_type == "series":
+                    library_base_folder = get_series_folder()
+                    media_main_folder = os.path.join(library_base_folder, media_title)
+                    if os.path.exists(media_main_folder):
+                        import shutil
+                        shutil.rmtree(media_main_folder, ignore_errors=True)
+                elif media_type == "anime":
+                    library_base_folder = get_anime_folder()
+                    media_main_folder = os.path.join(library_base_folder, media_title)
+                    if os.path.exists(media_main_folder):
+                        import shutil
+                        shutil.rmtree(media_main_folder, ignore_errors=True)
             # Remove from database
             infohash = torrent.get('infohash')
             if infohash:
