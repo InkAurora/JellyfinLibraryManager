@@ -4,6 +4,7 @@ Database management for torrent tracking in the Jellyfin Library Manager.
 
 import os
 import json
+import re
 import threading
 from datetime import datetime
 from typing import Dict, List, Optional, Any
@@ -11,6 +12,19 @@ from config import NOTIFICATION_RETENTION_HOURS, ANIME_FOLDER, SERIES_FOLDER, ME
 
 
 _db_file_lock = threading.RLock()
+
+
+_INFOHASH_PATTERN = re.compile(r'^[A-Fa-f0-9]{40,64}$')
+
+
+def _normalize_infohash(value: Any) -> Optional[str]:
+    """Normalize and validate an infohash before persisting it."""
+    infohash = str(value or "").strip()
+    if not infohash or infohash.upper() == "N/A":
+        return None
+    if not _INFOHASH_PATTERN.fullmatch(infohash):
+        return None
+    return infohash.lower()
 
 
 def _get_storage_base_folder() -> str:
@@ -90,6 +104,11 @@ class TorrentDatabase:
     def add_torrent(self, torrent_info: Dict[str, Any]) -> Optional[int]:
         """Add a torrent to the tracking database."""
         with _db_file_lock:
+            normalized_infohash = _normalize_infohash(torrent_info.get("infohash"))
+            if normalized_infohash is None:
+                print("⚠️  Warning: Skipping torrent tracking entry because the infohash is missing or invalid.")
+                return None
+
             db_data = self.load()
             next_torrent_id = self._get_next_torrent_id(db_data.get("torrents", []))
             source_download_path = torrent_info.get("source_download_path", torrent_info.get("download_path", "Default"))
@@ -110,7 +129,7 @@ class TorrentDatabase:
                 "seeds": torrent_info.get("seeds", 0),
                 "leechers": torrent_info.get("leechers", 0),
                 "downloads": torrent_info.get("downloads", 0),
-                "infohash": torrent_info.get("infohash", "N/A"),
+                "infohash": normalized_infohash,
                 "category": torrent_info.get("category", "N/A"),
                 "link": torrent_info.get("link", "N/A"),
                 "source_download_path": source_download_path,

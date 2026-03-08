@@ -2,21 +2,24 @@
 Series management module for the Jellyfin Library Manager.
 """
 
+import json
 import os
+import shutil
 import time
 import msvcrt
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 from typing import List, Dict, Any, Optional, Tuple
 from config import Colors
 from utils import clear_screen, wait_for_enter, validate_directory, is_episode_file, format_bytes
 from ui import MenuSystem
-from file_utils import list_series, create_series_symlinks, remove_symlink_safely
+from file_utils import list_series, create_series_symlinks, remove_symlink_safely, cleanup_jellyfin_files
 from imdb_api import interactive_imdb_series_selection
 from qbittorrent_api import (
     qb_check_connection, qb_login, qb_add_torrent, qb_get_search_plugins,
-    qb_start_search, qb_get_search_status, qb_get_search_results, qb_delete_search, qb_get_torrent_info
+    qb_start_search, qb_get_search_status, qb_get_search_results, qb_delete_search, qb_get_torrent_info,
+    qb_remove_torrent
 )
-from database import add_torrent_to_database, get_tracked_torrents, remove_torrent_from_database_by_infohash
+from database import add_torrent_to_database, TorrentDatabase
 from custom_autocomplete import (
     get_series_folder_with_custom_autocomplete,
     get_download_path_with_custom_autocomplete
@@ -339,12 +342,18 @@ class SeriesManager:
             self.menu_system.show_error("Selected result does not include a downloadable URL.")
             return
 
+        preexisting_hashes = {
+            str(torrent.get("hash", "") or "").strip().lower()
+            for torrent in qb_get_torrent_info(session)
+            if str(torrent.get("hash", "") or "").strip()
+        }
+
         success = qb_add_torrent(session, torrent_link, download_path)
         if not success:
             self.menu_system.show_error("Failed to add torrent to qBittorrent.")
             return
 
-        infohash, source_category = self._resolve_torrent_identity(session, selected, torrent_link)
+        infohash, source_category = self._resolve_torrent_identity(session, selected, torrent_link, preexisting_hashes)
         torrent_info = {
             "title": name,
             "size": str(selected.get("fileSize", "Unknown")),
@@ -360,21 +369,91 @@ class SeriesManager:
             "media_type": "series",
             "media_metadata": metadata
         }
-        torrent_id = add_torrent_to_database(torrent_info)
+        torrent_id = add_torrent_to_database(torrent_info) if infohash != "N/A" else None
 
         clear_screen()
         print("✅ Torrent added successfully!")
         print(f"📺 Series: {metadata.get('title', 'Unknown')}")
         if torrent_id:
             print(f"🗃️  Database ID: #{torrent_id}")
+        else:
+            print("⚠️  Warning: Could not resolve a valid infohash, so this torrent was not added to the tracking database.")
         wait_for_enter()
 
-    def _resolve_torrent_identity(self, session, selected: Dict[str, Any], torrent_link: str) -> Tuple[str, str]:
+    def _extract_infohash_from_link(self, torrent_link: str) -> str:
+        """Extract a btih infohash directly from a magnet link when available."""
+        parsed = urlparse(str(torrent_link or "").strip())
+        if parsed.scheme.lower() != "magnet":
+            return ""
+
+        for xt_value in parse_qs(parsed.query).get("xt", []):
+            xt_value = str(xt_value or "").strip()
+            if xt_value.lower().startswith("urn:btih:"):
+                return xt_value.split(":")[-1].strip()
+        return ""
+
+    def _to_int(self, value: Any) -> int:
+        """Convert provider values to ints without raising on bad metadata."""
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _match_qb_torrent_hash(
+        self,
+        torrents: List[Dict[str, Any]],
+        candidate_name: str,
+        candidate_size: int,
+        candidate_links: set[str],
+        known_hashes: set[str]
+    ) -> str:
+        """Best-effort match for the torrent that was just added to qBittorrent."""
+        candidates = []
+        for torrent in torrents:
+            torrent_hash = str(torrent.get("hash", "") or "").strip()
+            normalized_hash = torrent_hash.lower()
+            if not torrent_hash or normalized_hash in known_hashes:
+                continue
+            candidates.append(torrent)
+
+            magnet = str(torrent.get("magnet_uri", "") or "")
+            comment = str(torrent.get("comment", "") or "")
+            blob = f"{magnet}\n{comment}"
+            if candidate_links and any(link in blob for link in candidate_links):
+                return torrent_hash
+
+        exact_name_matches = [
+            torrent for torrent in candidates
+            if str(torrent.get("name", "") or "").strip().lower() == candidate_name
+        ]
+        if len(exact_name_matches) == 1:
+            return str(exact_name_matches[0].get("hash", "") or "").strip()
+        if exact_name_matches and candidate_size > 0:
+            best_match = min(
+                exact_name_matches,
+                key=lambda torrent: abs(self._to_int(torrent.get("size", 0)) - candidate_size)
+            )
+            return str(best_match.get("hash", "") or "").strip()
+
+        exact_size_matches = [
+            torrent for torrent in candidates
+            if self._to_int(torrent.get("size", 0)) == candidate_size and candidate_size > 0
+        ]
+        if len(exact_size_matches) == 1:
+            return str(exact_size_matches[0].get("hash", "") or "").strip()
+
+        if len(candidates) == 1:
+            return str(candidates[0].get("hash", "") or "").strip()
+
+        return ""
+
+    def _resolve_torrent_identity(self, session, selected: Dict[str, Any], torrent_link: str, preexisting_hashes: Optional[set[str]] = None) -> Tuple[str, str]:
         """Resolve stable infohash and normalized source category for DB storage."""
         direct_hash = str(
             selected.get("fileHash")
             or selected.get("infohash")
             or selected.get("hash")
+            or self._extract_infohash_from_link(torrent_link)
             or ""
         ).strip()
         infohash = direct_hash if direct_hash and direct_hash.upper() != "N/A" else "N/A"
@@ -393,39 +472,28 @@ class SeriesManager:
             return infohash, category
 
         candidate_name = str(selected.get("fileName", "") or "").strip().lower()
+        candidate_size = self._to_int(selected.get("fileSize", 0))
         candidate_links = {
             str(torrent_link or "").strip(),
             str(selected.get("fileUrl", "") or "").strip(),
             str(selected.get("descrLink", "") or "").strip()
         }
         candidate_links = {c for c in candidate_links if c}
+        known_hashes = {hash_value for hash_value in (preexisting_hashes or set()) if hash_value}
 
         # qB can take a moment before the newly added torrent appears in /torrents/info.
-        for _ in range(10):
+        for _ in range(20):
             torrents = qb_get_torrent_info(session)
             if torrents:
-                # Strong match: URL appears in magnet/comment fields.
-                for torrent in torrents:
-                    torrent_hash = str(torrent.get("hash", "") or "").strip()
-                    if not torrent_hash:
-                        continue
-                    magnet = str(torrent.get("magnet_uri", "") or "")
-                    comment = str(torrent.get("comment", "") or "")
-                    blob = f"{magnet}\n{comment}"
-                    if any(link in blob for link in candidate_links):
-                        return torrent_hash, category
+                matched_hash = self._match_qb_torrent_hash(torrents, candidate_name, candidate_size, candidate_links, known_hashes)
+                if matched_hash:
+                    return matched_hash, category
 
-                # Fallback: exact name match.
-                name_matches = []
-                if candidate_name:
-                    for torrent in torrents:
-                        torrent_name = str(torrent.get("name", "") or "").strip().lower()
-                        torrent_hash = str(torrent.get("hash", "") or "").strip()
-                        if torrent_hash and torrent_name == candidate_name:
-                            name_matches.append(torrent_hash)
-                    if len(name_matches) == 1:
-                        return name_matches[0], category
-            time.sleep(0.3)
+                if known_hashes:
+                    matched_hash = self._match_qb_torrent_hash(torrents, candidate_name, candidate_size, candidate_links, set())
+                    if matched_hash:
+                        return matched_hash, category
+            time.sleep(0.5)
 
         return "N/A", category
 
@@ -455,39 +523,246 @@ class SeriesManager:
             return None
         return download_path
 
+    def _normalize_path(self, path_value: Optional[str]) -> str:
+        """Normalize a filesystem path for comparisons."""
+        if not isinstance(path_value, str) or not path_value.strip():
+            return ""
+        return os.path.abspath(path_value)
+
+    def _find_associated_torrent_by_track_json(self, series_main_folder: str, tracked_torrents: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Try to match a tracked series torrent using the library track.json file."""
+        track_path = os.path.join(series_main_folder, "track.json")
+        if not os.path.exists(track_path):
+            return None
+
+        try:
+            with open(track_path, "r", encoding="utf-8") as file_handle:
+                track_data = json.load(file_handle)
+        except Exception:
+            return None
+
+        track_infohash = str(track_data.get("infohash", "") or "").strip().lower()
+        candidate_paths = {
+            self._normalize_path(track_data.get("library_path")),
+            self._normalize_path(track_data.get("source_download_path")),
+            self._normalize_path(track_data.get("download_path")),
+        }
+        candidate_paths.discard("")
+
+        for torrent in tracked_torrents:
+            torrent_infohash = str(torrent.get("infohash", "") or "").strip().lower()
+            if track_infohash and torrent_infohash == track_infohash:
+                return torrent
+
+            for path_key in ("library_path", "source_download_path", "download_path"):
+                torrent_path = self._normalize_path(torrent.get(path_key))
+                if torrent_path and torrent_path in candidate_paths:
+                    return torrent
+
+        return None
+
+    def _find_associated_torrent(self, series_main_folder: str, seasons: List[Tuple[str, str, str]]) -> Optional[Dict[str, Any]]:
+        """Best-effort match for a tracked series torrent."""
+        tracked_torrents = [
+            torrent for torrent in TorrentDatabase().get_tracked_torrents()
+            if torrent.get("media_type") == "series"
+        ]
+
+        associated_torrent = self._find_associated_torrent_by_track_json(series_main_folder, tracked_torrents)
+        if associated_torrent:
+            return associated_torrent
+
+        candidate_paths = {self._normalize_path(series_main_folder)}
+        for _, _, target_path in seasons:
+            normalized_target = self._normalize_path(target_path)
+            if normalized_target:
+                candidate_paths.add(normalized_target)
+                candidate_paths.add(self._normalize_path(os.path.dirname(normalized_target)))
+        candidate_paths.discard("")
+
+        for torrent in tracked_torrents:
+            for path_key in ("library_path", "source_download_path", "download_path"):
+                torrent_path = self._normalize_path(torrent.get(path_key))
+                if torrent_path and torrent_path in candidate_paths:
+                    return torrent
+
+        return None
+
+    def _get_downloading_torrents(self) -> List[Dict[str, Any]]:
+        """Get tracked series torrents that are still downloading in qBittorrent."""
+        downloading_torrents: List[Dict[str, Any]] = []
+        tracked_torrents = [
+            torrent for torrent in TorrentDatabase().get_tracked_torrents()
+            if torrent.get("media_type") == "series"
+        ]
+        qb_torrents: List[Dict[str, Any]] = []
+
+        if qb_check_connection():
+            session = qb_login()
+            if session:
+                qb_torrents = qb_get_torrent_info(session)
+
+        active_states = {"completedDL", "uploading", "stalledUP", "queuedUP"}
+        for tracked in tracked_torrents:
+            tracked_hash = str(tracked.get("infohash", "") or "").strip().lower()
+            if not tracked_hash or tracked_hash == "n/a":
+                continue
+
+            for qb_torrent in qb_torrents:
+                qb_hash = str(qb_torrent.get("hash", "") or "").strip().lower()
+                if qb_hash != tracked_hash:
+                    continue
+
+                if qb_torrent.get("state") not in active_states:
+                    downloading_torrents.append({**tracked, **qb_torrent})
+                break
+
+        return downloading_torrents
+
+    def _remove_downloading_torrent(self, downloading_torrents: List[Dict[str, Any]]) -> None:
+        """Remove an active series torrent directly from qBittorrent and the local database."""
+        torrent_titles = [
+            f"{torrent.get('title', torrent.get('name', 'Unknown'))} [{torrent.get('state', 'unknown')}]"
+            for torrent in downloading_torrents
+        ]
+        torrent_titles.append("🔙 Back")
+
+        torrent_choice = self.menu_system.navigate_menu(torrent_titles, "Select downloading series torrent to remove")
+        if torrent_choice == -1 or torrent_choice == len(torrent_titles) - 1:
+            return
+
+        selected_torrent = downloading_torrents[torrent_choice]
+        torrent_title = selected_torrent.get("title", selected_torrent.get("name", "Unknown"))
+        confirm = self.menu_system.confirm_action(
+            f"Remove downloading torrent '{torrent_title}'?",
+            ["❌ No", "🗑️  Yes"]
+        )
+        if not confirm:
+            return
+
+        session = qb_login()
+        success = False
+        if session:
+            infohash = selected_torrent.get("hash") or selected_torrent.get("infohash")
+            success = qb_remove_torrent(session, infohash, delete_files=True)
+
+        infohash = str(selected_torrent.get("infohash", "") or "").strip()
+        if infohash and infohash != "N/A":
+            TorrentDatabase().remove_torrents_by_infohash(infohash)
+
+        clear_screen()
+        if success:
+            print(f"🗑️  Removed downloading torrent '{torrent_title}'.")
+        else:
+            print("❌ Failed to remove torrent.")
+        wait_for_enter()
+
+    def _prompt_delete_original_folder(self, target_path: str, cleanup_if_kept: bool = False) -> None:
+        """Optionally delete the original series source folder after library removal."""
+        normalized_target = self._normalize_path(target_path)
+        if not normalized_target or not os.path.exists(normalized_target):
+            return
+
+        delete_options = ["❌ No, keep original folder", "🗑️  Yes, delete original folder"]
+        delete_choice = self.menu_system.navigate_menu(delete_options, f"🗑️  Also delete '{normalized_target}'?")
+        if delete_choice == 1:
+            try:
+                shutil.rmtree(normalized_target)
+                clear_screen()
+                print(f"🗑️  Deleted original folder '{normalized_target}'.")
+            except Exception as e:
+                clear_screen()
+                print(f"❌ Error deleting original folder: {e}")
+            return
+
+        if cleanup_if_kept:
+            cleanup_jellyfin_files(normalized_target)
+
     def remove_series(self) -> None:
         """Remove a series from the library."""
         series_list = list_series()
-        if not series_list:
+        downloading_torrents = self._get_downloading_torrents()
+        if not series_list and not downloading_torrents:
             self.menu_system.show_message("\n📺 No series found in your library.")
             return
 
         options = []
         for i, (series_name, seasons) in enumerate(series_list, 1):
             options.append(f"{i:3d}. {series_name} ({len(seasons)} season(s))")
+        if downloading_torrents:
+            options.append("⬇️  Remove downloading torrents...")
         options.append("🔙 Back to main menu")
 
-        choice = self.menu_system.navigate_menu(options, "🗑️  REMOVE SERIES")
+        choice = self.menu_system.navigate_menu(options, "🗑️  REMOVE SERIES OR TORRENT")
         if choice == -1 or choice == len(options) - 1:
+            return
+
+        if downloading_torrents and choice == len(options) - 2:
+            self._remove_downloading_torrent(downloading_torrents)
             return
 
         series_name, seasons = series_list[choice]
         first_season_path = seasons[0][1]
         series_main_folder = os.path.dirname(first_season_path)
+        source_target = next(
+            (target for _, _, target in seasons if target not in ["BROKEN LINK", "ACCESS DENIED", "NO_SYMLINKS", "EMPTY"]),
+            ""
+        )
 
         if not self.menu_system.confirm_action(f"❓ Remove '{series_name}' from library?"):
             self.menu_system.show_message("⏭️  Cancelled.")
             return
 
+        associated_torrent = self._find_associated_torrent(series_main_folder, seasons)
         if remove_symlink_safely(series_main_folder):
-            for torrent in get_tracked_torrents():
-                torrent_library_path = torrent.get("library_path", "")
-                if os.path.abspath(torrent_library_path) == os.path.abspath(series_main_folder):
-                    infohash = torrent.get("infohash")
-                    if infohash and infohash != "N/A":
-                        remove_torrent_from_database_by_infohash(infohash)
             clear_screen()
             print(f"✅ Removed series '{series_name}' from library.")
+
+            if associated_torrent:
+                infohash = str(associated_torrent.get("infohash", "") or "").strip()
+                if infohash and infohash != "N/A":
+                    TorrentDatabase().remove_torrents_by_infohash(infohash)
+
+                torrent_title = associated_torrent.get("title", associated_torrent.get("name", "Unknown"))
+                if infohash and infohash != "N/A":
+                    remove_options = [
+                        "❌ No, keep torrent in qBittorrent",
+                        "🗑️  Yes, remove torrent from qBittorrent (optionally delete files)"
+                    ]
+                    remove_choice = self.menu_system.navigate_menu(
+                        remove_options,
+                        f"🗑️  Also remove torrent '{torrent_title}' from qBittorrent?"
+                    )
+                    if remove_choice == 1:
+                        delete_files_options = [
+                            "❌ No, keep files on disk",
+                            "🗑️  Yes, delete files from disk"
+                        ]
+                        delete_files_choice = self.menu_system.navigate_menu(
+                            delete_files_options,
+                            f"🗑️  Delete files for torrent '{torrent_title}'?"
+                        )
+                        delete_files = delete_files_choice == 1
+                        session = qb_login()
+                        success = False
+                        if session:
+                            success = qb_remove_torrent(session, infohash, delete_files)
+                        clear_screen()
+                        if success:
+                            print(f"🗑️  Removed torrent '{torrent_title}' from qBittorrent.")
+                        else:
+                            print("❌ Failed to remove torrent from qBittorrent.")
+                        if source_target:
+                            self._prompt_delete_original_folder(source_target, cleanup_if_kept=True)
+                        wait_for_enter()
+                        return
+
+                    clear_screen()
+                    print(f"✅ Removed series '{series_name}' from library.")
+                    print(f"❌ Kept torrent '{torrent_title}' in qBittorrent.")
+
+            if source_target:
+                self._prompt_delete_original_folder(source_target)
         else:
             clear_screen()
             print(f"❌ Failed to remove series '{series_name}'.")
