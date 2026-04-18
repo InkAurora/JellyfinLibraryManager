@@ -629,6 +629,7 @@ class AnimeManager:
                     )
                     delete_files = delete_files_choice == 1
                     session = qb_login()
+                    success = False
                     if session:
                         success = qb_remove_torrent(session, associated_torrent["infohash"], delete_files)
                         clear_screen()
@@ -640,6 +641,8 @@ class AnimeManager:
                         clear_screen()
                         print(f"❌ Could not connect to qBittorrent.")
                     wait_for_enter()
+                    if delete_files and success:
+                        return
                     # After removing from qBittorrent, ask about folder deletion
                     if os.path.exists(anime_main_folder):
                         delete_options = ["❌ No, keep original folder", "🗑️  Yes, delete original folder"]

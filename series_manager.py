@@ -752,6 +752,9 @@ class SeriesManager:
                             print(f"🗑️  Removed torrent '{torrent_title}' from qBittorrent.")
                         else:
                             print("❌ Failed to remove torrent from qBittorrent.")
+                        if delete_files and success:
+                            wait_for_enter()
+                            return
                         if source_target:
                             self._prompt_delete_original_folder(source_target, cleanup_if_kept=True)
                         wait_for_enter()

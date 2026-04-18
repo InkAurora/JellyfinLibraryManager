@@ -750,6 +750,9 @@ class MovieManager:
                                 print(f"🗑️  Removed torrent '{torrent_title}' from qBittorrent.")
                             else:
                                 print("❌ Failed to remove torrent from qBittorrent.")
+                            if delete_files and success:
+                                wait_for_enter()
+                                return
                         else:
                             clear_screen()
                             print(f"✅ Removed movie '{movie_name}' from library.")
