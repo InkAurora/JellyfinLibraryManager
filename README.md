@@ -129,6 +129,100 @@ Core API and data modules are mostly platform-neutral, but menu/search/keyboard 
    python main.py
    ```
 
+5. **Run the HTTP API**
+   ```bash
+   python api_server.py
+   ```
+
+   The API listens on `http://127.0.0.1:8765` by default and has no authentication.
+   Use `--host` and `--port` to bind elsewhere:
+
+   ```bash
+   python api_server.py --host 0.0.0.0 --port 8765
+   ```
+
+## HTTP API
+
+The API returns JSON envelopes:
+
+```json
+{ "ok": true, "data": {} }
+```
+
+Errors use:
+
+```json
+{ "ok": false, "error": "Message" }
+```
+
+### Core endpoints
+
+- `GET /api` - list available routes
+- `GET /api/health` - API health and qBittorrent accessibility
+- `GET /api/config` - configured media paths and qBittorrent host, without password
+
+### Library endpoints
+
+- `GET /api/library/movies`
+- `POST /api/library/movies`
+- `GET /api/library/anime`
+- `POST /api/library/anime`
+- `GET /api/library/series`
+- `POST /api/library/series`
+
+Add a movie symlink:
+
+```bash
+curl -X POST http://127.0.0.1:8765/api/library/movies ^
+  -H "Content-Type: application/json" ^
+  -d "{\"path\":\"D:\\Downloads\\Movie.mkv\",\"overwrite\":false}"
+```
+
+Add anime or series symlinks:
+
+```bash
+curl -X POST http://127.0.0.1:8765/api/library/anime ^
+  -H "Content-Type: application/json" ^
+  -d "{\"source_path\":\"D:\\Downloads\\Anime Season\",\"name\":\"Anime Name\",\"season_number\":1}"
+```
+
+Use `/api/library/series` with the same body for TV series.
+
+### Torrent endpoints
+
+- `GET /api/torrents/tracked` - tracked torrent database
+- `POST /api/torrents/sync` - sync tracked torrents with qBittorrent
+- `POST /api/torrents/auto-add` - add completed tracked torrents to the library
+- `DELETE /api/torrents/{infohash}?delete_files=false&delete_library=false`
+
+### qBittorrent endpoints
+
+- `GET /api/qbittorrent/status`
+- `GET /api/qbittorrent/torrents`
+- `POST /api/qbittorrent/torrents`
+- `GET /api/qbittorrent/torrents/{infohash}/files`
+- `GET /api/qbittorrent/search/plugins`
+- `POST /api/qbittorrent/search`
+- `GET /api/qbittorrent/search/{id}/status`
+- `GET /api/qbittorrent/search/{id}/results?limit=100&offset=0`
+- `DELETE /api/qbittorrent/search/{id}`
+
+Add and optionally track a torrent:
+
+```bash
+curl -X POST http://127.0.0.1:8765/api/qbittorrent/torrents ^
+  -H "Content-Type: application/json" ^
+  -d "{\"url\":\"magnet:?xt=urn:btih:...\",\"media_type\":\"movie\",\"media_metadata\":{\"title\":\"Movie Name\",\"year\":\"2026\"}}"
+```
+
+### Search endpoints
+
+- `GET /api/search/anime?q=one%20piece&limit=10`
+- `GET /api/search/movies?q=alien&limit=15`
+- `GET /api/search/series?q=lost&limit=15`
+- `GET /api/search/nyaa?q=anime%20name&limit=50&sort=seeds`
+- `GET /api/search/nyaa/files?url=https%3A%2F%2Fnyaa.si%2Fview%2F...`
+
 ## 📖 Usage Guide
 
 ### Main Menu Options
