@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
@@ -205,6 +206,8 @@ class JellyfinApi:
     def __init__(self):
         self.imdb = IMDBAPI()
         self.torrent_manager = TorrentManager()
+        self._qb_search_session = None
+        self._qb_search_session_lock = threading.RLock()
 
     def handle(self, method: str, path: str, query: Dict[str, List[str]], payload: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
         segments = [segment for segment in path.strip("/").split("/") if segment]
@@ -288,10 +291,10 @@ class JellyfinApi:
             session = self._qb_session()
             return _ok(qb_get_search_plugins(session))
         if len(route) == 4 and route[:2] == ["qbittorrent", "search"] and route[3] == "status":
-            session = self._qb_session()
+            session = self._get_qb_search_session()
             return _ok(qb_get_search_status(session, int(route[2])))
         if len(route) == 4 and route[:2] == ["qbittorrent", "search"] and route[3] == "results":
-            session = self._qb_session()
+            session = self._get_qb_search_session()
             limit = _normalize_limit(self._first(query, "limit", 100), default=100, maximum=500)
             offset = _normalize_int(self._first(query, "offset", 0), default=0, minimum=0, maximum=100000)
             return _ok(qb_get_search_results(session, int(route[2]), limit=limit, offset=offset))
@@ -340,7 +343,7 @@ class JellyfinApi:
         if route == ["qbittorrent", "torrents"]:
             return self._add_qbittorrent_torrent(payload)
         if route == ["qbittorrent", "search"]:
-            session = self._qb_session()
+            session = self._get_qb_search_session()
             pattern = _required_str(payload, "pattern")
             category = str(payload.get("category", "all") or "all")
             plugins = str(payload.get("plugins", "enabled") or "enabled")
@@ -354,7 +357,7 @@ class JellyfinApi:
         if len(route) == 2 and route[0] == "torrents":
             return self._delete_torrent(route[1], query)
         if len(route) == 3 and route[:2] == ["qbittorrent", "search"]:
-            session = self._qb_session()
+            session = self._get_qb_search_session()
             if not qb_delete_search(session, int(route[2])):
                 raise ApiError(502, "Failed to delete qBittorrent search")
             return _ok({"deleted": True})
@@ -514,6 +517,16 @@ class JellyfinApi:
         if not session:
             raise ApiError(502, "Failed to authenticate with qBittorrent")
         return session
+
+    def _get_qb_search_session(self):
+        # qBittorrent search jobs are scoped to the web session that created them.
+        with self._qb_search_session_lock:
+            if self._qb_search_session is None:
+                self._qb_search_session = qb_login()
+            if not self._qb_search_session:
+                self._qb_search_session = None
+                raise ApiError(502, "Failed to authenticate with qBittorrent")
+            return self._qb_search_session
 
     @staticmethod
     def _first(query: Dict[str, List[str]], key: str, default: Any = None) -> Any:
