@@ -120,6 +120,23 @@ class QBittorrentAPI:
         except Exception as e:
             print(f"❌ Error getting torrent info: {e}")
             return []
+
+    def get_torrent_files(self, infohash: str) -> List[Dict[str, Any]]:
+        """Get the file list for a torrent by infohash."""
+        if not self.session:
+            return []
+
+        try:
+            response = self._request_with_retry(
+                "GET",
+                "/api/v2/torrents/files",
+                params={"hash": str(infohash or "").strip()}
+            )
+            payload = response.json()
+            return payload if isinstance(payload, list) else []
+        except Exception as e:
+            print(f"❌ Error getting torrent files: {e}")
+            return []
     
     def check_connection(self) -> bool:
         """Check if qBittorrent is accessible."""
@@ -275,6 +292,13 @@ def qb_get_torrent_info(session: requests.Session) -> List[Dict[str, Any]]:
     api = QBittorrentAPI()
     api.session = session
     return api.get_torrent_info()
+
+
+def qb_get_torrent_files(session: requests.Session, infohash: str) -> List[Dict[str, Any]]:
+    """Get a torrent's file list from qBittorrent. (Legacy function)"""
+    api = QBittorrentAPI()
+    api.session = session
+    return api.get_torrent_files(infohash)
 
 
 def qb_check_connection() -> bool:

@@ -6,7 +6,7 @@ import json
 import os
 import re
 from typing import List, Dict, Any, Tuple, Optional
-from qbittorrent_api import qb_check_connection, qb_login, qb_get_torrent_info
+from qbittorrent_api import qb_check_connection, qb_login, qb_get_torrent_info, qb_get_torrent_files
 from database import get_tracked_torrents, update_torrent_status, update_torrent_paths, remove_torrent_from_database_by_infohash
 from utils import is_episode_file, is_video_file, get_anime_folder, get_series_folder, get_media_folder
 from file_utils import create_movie_symlink
@@ -53,6 +53,110 @@ class TorrentManager:
                 if is_video_file(file_path):
                     video_files.append(file_path)
         return video_files
+
+    def _normalize_qb_path(self, path: Any) -> str:
+        """Normalize qBittorrent paths and drop placeholder values."""
+        normalized_path = str(path or "").strip().strip('"')
+        if not normalized_path or normalized_path.lower() == "unknown":
+            return ""
+        return os.path.abspath(os.path.normpath(normalized_path))
+
+    def _resolve_completed_torrent_path(self, torrent: Dict[str, Any]) -> str:
+        """Resolve the on-disk root path for a completed torrent."""
+        candidate_paths: List[str] = []
+        content_path = self._normalize_qb_path(torrent.get("qb_content_path"))
+        save_path = self._normalize_qb_path(torrent.get("qb_save_path"))
+        torrent_name = str(torrent.get("qb_name", "") or "").strip()
+
+        if content_path:
+            candidate_paths.append(content_path)
+        if save_path and torrent_name:
+            candidate_paths.append(os.path.abspath(os.path.join(save_path, torrent_name)))
+
+        seen = set()
+        for candidate in candidate_paths:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            if os.path.exists(candidate):
+                return candidate
+
+        return ""
+
+    def _resolve_torrent_file_paths(self, torrent: Dict[str, Any]) -> List[str]:
+        """Resolve absolute file paths for a torrent via qBittorrent's file list."""
+        infohash = str(torrent.get("infohash", "") or "").strip()
+        save_path = self._normalize_qb_path(torrent.get("qb_save_path"))
+        content_path = self._normalize_qb_path(torrent.get("qb_content_path"))
+        if not infohash or not save_path:
+            return []
+
+        session = qb_login()
+        if not session:
+            return []
+
+        resolved_paths: List[str] = []
+        for qb_file in qb_get_torrent_files(session, infohash):
+            relative_name = str(qb_file.get("name", "") or "").strip().replace("/", os.sep)
+            if not relative_name:
+                continue
+
+            candidate_paths: List[str] = []
+            if content_path:
+                if os.path.isdir(content_path):
+                    candidate_paths.append(os.path.join(content_path, relative_name))
+                elif os.path.isfile(content_path):
+                    candidate_paths.append(content_path)
+                else:
+                    candidate_paths.append(os.path.join(os.path.dirname(content_path), relative_name))
+            candidate_paths.append(os.path.join(save_path, relative_name))
+
+            for candidate in candidate_paths:
+                normalized_candidate = os.path.abspath(os.path.normpath(candidate))
+                if os.path.isfile(normalized_candidate):
+                    resolved_paths.append(normalized_candidate)
+                    break
+
+        unique_paths: List[str] = []
+        seen = set()
+        for resolved_path in resolved_paths:
+            if resolved_path in seen:
+                continue
+            seen.add(resolved_path)
+            unique_paths.append(resolved_path)
+        return unique_paths
+
+    def _select_primary_movie_file_from_candidates(self, download_path: str, candidate_files: List[str]) -> Optional[str]:
+        """Select the main movie file from a torrent-specific file list."""
+        video_files = [
+            os.path.abspath(file_path)
+            for file_path in candidate_files
+            if file_path and os.path.isfile(file_path) and is_video_file(file_path)
+        ]
+        if not video_files:
+            return None
+
+        sort_root = download_path if download_path else os.path.dirname(video_files[0])
+        return min(video_files, key=lambda file_path: self._get_movie_candidate_sort_key(file_path, sort_root))
+
+    def _resolve_primary_movie_source_path(self, torrent: Dict[str, Any]) -> str:
+        """Resolve the primary movie file for a completed torrent."""
+        resolved_torrent_path = self._resolve_completed_torrent_path(torrent)
+        torrent_file_paths = self._resolve_torrent_file_paths(torrent)
+        if torrent_file_paths:
+            movie_file = self._select_primary_movie_file_from_candidates(
+                resolved_torrent_path or self._normalize_qb_path(torrent.get("qb_save_path")),
+                torrent_file_paths,
+            )
+            if movie_file:
+                return movie_file
+
+        if resolved_torrent_path:
+            movie_file = self._select_primary_movie_file(resolved_torrent_path)
+            if movie_file:
+                return movie_file
+
+        return ""
 
     def _get_movie_candidate_sort_key(self, file_path: str, download_path: str) -> Tuple[int, int, int, int, str]:
         """Build a deterministic sort key for selecting a primary movie file."""
@@ -167,6 +271,7 @@ class TorrentManager:
                     'qb_ratio': qb_match.get('ratio', 0),
                     'qb_name': qb_match.get('name', 'Unknown'),
                     'qb_save_path': qb_match.get('save_path', 'Unknown'),
+                    'qb_content_path': qb_match.get('content_path', ''),
                     'found_in_qb': True
                 })
             else:
@@ -325,30 +430,21 @@ class TorrentManager:
                 if not media_metadata:
                     continue
                 
-                # Get the download path from qBittorrent
-                download_path = torrent.get('qb_save_path', '')
-                torrent_name = torrent.get('qb_name', '')
-                
-                if not download_path or not torrent_name:
-                    continue
-                
-                # Construct the full path to the torrent's folder
-                # qb_save_path is the base download directory (e.g., "C:\Torrents")
-                # qb_name is the torrent folder name (e.g., "Domestic Girlfriend S01 1080p...")
-                full_torrent_path = os.path.join(download_path, torrent_name)
-                
-                if not os.path.exists(full_torrent_path):
-                    continue
-                
                 # Try to add to library
                 library_path = ""
+                source_download_path = self._resolve_completed_torrent_path(torrent)
                 if media_type == "movie":
-                    movie_library_path = self.add_completed_movie_to_library(torrent, full_torrent_path)
+                    source_download_path = self._resolve_primary_movie_source_path(torrent)
+                    if not source_download_path:
+                        continue
+                    movie_library_path = self.add_completed_movie_to_library(torrent, source_download_path)
                     success = movie_library_path is not None
                     if movie_library_path:
                         library_path = movie_library_path
                 else:
-                    success = self.add_completed_torrent_to_library(torrent, full_torrent_path)
+                    if not source_download_path:
+                        continue
+                    success = self.add_completed_torrent_to_library(torrent, source_download_path)
                     if success:
                         media_title = sanitize_filename(media_metadata.get('title', 'Unknown'))
                         if media_type == "series":
@@ -358,7 +454,7 @@ class TorrentManager:
                 
                 if success:
                     completed_torrents.append(torrent)
-                    update_torrent_paths(torrent['id'], source_download_path=full_torrent_path, library_path=library_path)
+                    update_torrent_paths(torrent['id'], source_download_path=source_download_path, library_path=library_path)
                     # Update torrent status in database
                     update_torrent_status(torrent['id'], 'added_to_library')
         
