@@ -5,10 +5,11 @@ Database management for torrent tracking in the Jellyfin Library Manager.
 import os
 import json
 import re
+import shutil
 import threading
 from datetime import datetime
 from typing import Dict, List, Optional, Any
-from config import NOTIFICATION_RETENTION_HOURS, ANIME_FOLDER, SERIES_FOLDER, MEDIA_FOLDERS
+from config import ANIME_FOLDER, MEDIA_FOLDERS, NOTIFICATION_RETENTION_HOURS, SERIES_FOLDER
 
 
 _db_file_lock = threading.RLock()
@@ -28,28 +29,48 @@ def _normalize_infohash(value: Any) -> Optional[str]:
 
 
 def _get_storage_base_folder() -> str:
-    """Get a writable base folder for database/notification storage."""
-    candidates: List[str] = []
+    """Get the app root used for database/notification storage."""
+    return os.path.dirname(os.path.abspath(__file__))
 
+
+def _migrate_legacy_storage_file(filename: str, destination: str) -> None:
+    """Move a global file from the old media-folder location when needed."""
+    if os.path.exists(destination):
+        return
+
+    legacy_folders: List[str] = []
     if isinstance(ANIME_FOLDER, str) and ANIME_FOLDER.strip():
-        candidates.append(ANIME_FOLDER)
+        legacy_folders.append(ANIME_FOLDER)
     if isinstance(SERIES_FOLDER, str) and SERIES_FOLDER.strip():
-        candidates.append(SERIES_FOLDER)
+        legacy_folders.append(SERIES_FOLDER)
     if isinstance(MEDIA_FOLDERS, (list, tuple)):
-        candidates.extend(folder for folder in MEDIA_FOLDERS if isinstance(folder, str) and folder.strip())
+        legacy_folders.extend(
+            folder for folder in MEDIA_FOLDERS
+            if isinstance(folder, str) and folder.strip()
+        )
 
-    app_dir = os.path.dirname(os.path.abspath(__file__))
-    candidates.append(app_dir)
-
-    for candidate in candidates:
-        try:
-            resolved_path = os.path.abspath(candidate)
-            os.makedirs(resolved_path, exist_ok=True)
-            return resolved_path
-        except OSError:
+    destination_folder = os.path.dirname(destination)
+    for legacy_folder in legacy_folders:
+        legacy_path = os.path.join(os.path.abspath(legacy_folder), filename)
+        if os.path.abspath(legacy_path) == os.path.abspath(destination):
+            continue
+        if not os.path.isfile(legacy_path):
             continue
 
-    return app_dir
+        try:
+            os.makedirs(destination_folder, exist_ok=True)
+            shutil.move(legacy_path, destination)
+            print(f"Moved {filename} to app root: {destination}")
+        except OSError as exc:
+            print(f"⚠️  Warning: Could not move {legacy_path} to app root: {exc}")
+        return
+
+
+def _get_default_storage_path(filename: str) -> str:
+    """Return an app-root path, migrating the former media-folder file."""
+    destination = os.path.join(_get_storage_base_folder(), filename)
+    _migrate_legacy_storage_file(filename, destination)
+    return destination
 
 
 class TorrentDatabase:
@@ -60,7 +81,7 @@ class TorrentDatabase:
     
     def _get_default_db_path(self) -> str:
         """Get the default path to the torrent database file."""
-        return os.path.join(_get_storage_base_folder(), "torrent_database.json")
+        return _get_default_storage_path("torrent_database.json")
 
     def _get_next_torrent_id(self, torrents: List[Dict[str, Any]]) -> int:
         """Get the next monotonic torrent ID."""
@@ -210,7 +231,7 @@ class NotificationManager:
     
     def _get_default_notifications_path(self) -> str:
         """Get the default path to the notifications file."""
-        return os.path.join(_get_storage_base_folder(), "torrent_notifications.json")
+        return _get_default_storage_path("torrent_notifications.json")
     
     def save_completion_notifications(self, completed_torrents: List[Dict[str, Any]]) -> None:
         """Save notification about completed torrents for later display."""
