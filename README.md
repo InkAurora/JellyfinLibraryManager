@@ -165,10 +165,13 @@ Errors use:
 
 - `GET /api/library/movies`
 - `POST /api/library/movies`
+- `DELETE /api/library/movies?path=...&delete_source=false`
 - `GET /api/library/anime`
 - `POST /api/library/anime`
+- `DELETE /api/library/anime?path=...&delete_source=false`
 - `GET /api/library/series`
 - `POST /api/library/series`
+- `DELETE /api/library/series?path=...&delete_source=false`
 
 Add a movie symlink:
 
@@ -188,12 +191,22 @@ curl -X POST http://127.0.0.1:8765/api/library/anime ^
 
 Use `/api/library/series` with the same body for TV series.
 
+Delete a library item:
+
+```bash
+curl -X DELETE "http://127.0.0.1:8765/api/library/series?path=D%3A%5CSeries%5CShow%20Name&delete_source=true"
+```
+
+`delete_source=false` removes only the Jellyfin library symlink or folder. `delete_source=true` removes tracked torrents through qBittorrent with `delete_files=true` and trusts qBittorrent to delete the source files, matching the CLI behavior. Untracked media falls back to deleting the symlink target when it is outside the configured library folders.
+
 ### Torrent endpoints
 
 - `GET /api/torrents/tracked` - tracked torrent database
 - `POST /api/torrents/sync` - sync tracked torrents with qBittorrent
 - `POST /api/torrents/auto-add` - add completed tracked torrents to the library
 - `DELETE /api/torrents/{infohash}?delete_files=false&delete_library=false`
+
+For completed tracked torrents, use `delete_files=true&delete_library=true`. JLM removes the selected torrent and payload through qBittorrent, then removes only library symlinks and episode sidecars owned by that torrent. Other torrents contributing episodes to the same Series remain intact. Empty season/Series folders are removed, and `track.json` is moved to a remaining tracked torrent when needed.
 
 ### qBittorrent endpoints
 
@@ -202,10 +215,18 @@ Use `/api/library/series` with the same body for TV series.
 - `POST /api/qbittorrent/torrents`
 - `GET /api/qbittorrent/torrents/{infohash}/files`
 - `GET /api/qbittorrent/search/plugins`
-- `POST /api/qbittorrent/search`
+- `POST /api/qbittorrent/search` - start a torrent search using a custom `pattern`
 - `GET /api/qbittorrent/search/{id}/status`
 - `GET /api/qbittorrent/search/{id}/results?limit=100&offset=0`
 - `DELETE /api/qbittorrent/search/{id}`
+
+Start a custom qBittorrent search:
+
+```bash
+curl -X POST http://127.0.0.1:8765/api/qbittorrent/search ^
+  -H "Content-Type: application/json" ^
+  -d "{\"pattern\":\"The Sopranos S01 1080p\",\"category\":\"all\",\"plugins\":\"enabled\"}"
+```
 
 Add and optionally track a torrent:
 

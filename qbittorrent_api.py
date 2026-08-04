@@ -83,7 +83,9 @@ class QBittorrentAPI:
                 "/api/v2/auth/login",
                 data={'username': self.username, 'password': self.password}
             )
-            if response.text == "Ok.":
+            # qBittorrent 5.2+ returns 204 No Content for successful
+            # WebAPI actions that do not produce a response payload.
+            if response.status_code == 204 or response.text.strip() == "Ok.":
                 return True
             else:
                 self.session = None

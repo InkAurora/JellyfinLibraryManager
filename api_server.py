@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
@@ -21,6 +22,7 @@ from database import (
     add_torrent_to_database,
     get_tracked_torrents,
     remove_torrent_from_database_by_infohash,
+    update_torrent_status,
 )
 from file_utils import (
     create_anime_symlinks,
@@ -127,18 +129,23 @@ def _season_status(target_path: str) -> str:
 
 def _movie_payload(movie: Tuple[str, str, str]) -> Dict[str, Any]:
     name, symlink_path, target_path = movie
+    library_path = os.path.dirname(symlink_path) if os.path.isfile(symlink_path) or os.path.islink(symlink_path) else symlink_path
+    status = "ok" if os.path.islink(symlink_path) and target_path not in {"BROKEN LINK", "NO_SYMLINKS"} else "broken"
     return {
         "name": name,
+        "path": library_path,
         "symlink_path": symlink_path,
         "target_path": target_path,
-        "status": "broken" if target_path == "BROKEN LINK" else "ok",
+        "status": status,
     }
 
 
 def _grouped_media_payload(item: Tuple[str, List[Tuple[str, str, str]]]) -> Dict[str, Any]:
     name, seasons = item
+    library_path = os.path.dirname(seasons[0][1]) if seasons else ""
     return {
         "name": name,
+        "path": library_path,
         "seasons": [
             {
                 "name": season_name,
@@ -161,6 +168,60 @@ def _extract_infohash_from_link(torrent_link: str) -> str:
         if xt_value.lower().startswith("urn:btih:"):
             return xt_value.split(":")[-1].strip()
     return ""
+
+
+def _is_same_or_child_path(path: str, parent: str) -> bool:
+    try:
+        normalized_path = os.path.normcase(os.path.abspath(path))
+        normalized_parent = os.path.normcase(os.path.abspath(parent))
+        return os.path.commonpath([normalized_path, normalized_parent]) == normalized_parent
+    except (OSError, ValueError):
+        return False
+
+
+def _library_roots_for_kind(kind: str) -> List[str]:
+    if kind == "movies":
+        return MEDIA_FOLDERS
+    if kind == "anime":
+        return [ANIME_FOLDER]
+    if kind == "series":
+        return [SERIES_FOLDER]
+    return []
+
+
+def _resolve_symlink_target(path: str) -> str:
+    try:
+        target = os.readlink(path)
+    except OSError:
+        return ""
+    if os.path.isabs(target):
+        return os.path.abspath(target)
+    return os.path.abspath(os.path.join(os.path.dirname(path), target))
+
+
+def _load_track_file(path: str) -> Dict[str, Any]:
+    candidates = []
+    if os.path.isdir(path):
+        candidates.append(os.path.join(path, "track.json"))
+    candidates.append(os.path.join(os.path.dirname(path), "track.json"))
+    for candidate in candidates:
+        try:
+            if os.path.isfile(candidate):
+                with open(candidate, "r", encoding="utf-8") as handle:
+                    payload = json.load(handle)
+                return payload if isinstance(payload, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            continue
+    return {}
+
+
+def _delete_path(path: str) -> None:
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path)
+    elif os.path.isdir(path) and os.path.islink(path):
+        os.rmdir(path)
+    else:
+        os.remove(path)
 
 
 def _find_new_torrent_hash(
@@ -197,6 +258,34 @@ def _find_new_torrent_hash(
 
     if len(new_torrents) == 1:
         return str(new_torrents[0].get("hash", "") or "").strip()
+
+    # qBittorrent may already have the torrent, or may accept the add before it
+    # appears as a new row. Fall back to unique full-list matches so repeated
+    # Add clicks can still create the tracking row needed by auto-add.
+    for torrent in after_torrents:
+        magnet = str(torrent.get("magnet_uri", "") or "")
+        comment = str(torrent.get("comment", "") or "")
+        if any(link and link in f"{magnet}\n{comment}" for link in candidate_links):
+            return str(torrent.get("hash", "") or "").strip()
+
+    if normalized_name_hint:
+        exact_matches = [
+            torrent
+            for torrent in after_torrents
+            if str(torrent.get("name", "") or "").strip().lower() == normalized_name_hint
+        ]
+        if len(exact_matches) == 1:
+            return str(exact_matches[0].get("hash", "") or "").strip()
+    return ""
+
+
+def _wait_for_torrent_hash(session: Any, before_hashes: set, torrent_url: str, title: str) -> str:
+    for attempt in range(8):
+        infohash = _find_new_torrent_hash(before_hashes, qb_get_torrent_info(session), torrent_url, title)
+        if INFOHASH_PATTERN.fullmatch(infohash or ""):
+            return infohash
+        if attempt < 7:
+            time.sleep(0.75)
     return ""
 
 
@@ -234,10 +323,13 @@ class JellyfinApi:
                 "GET /api/config",
                 "GET /api/library/movies",
                 "POST /api/library/movies",
+                "DELETE /api/library/movies?path=...",
                 "GET /api/library/anime",
                 "POST /api/library/anime",
+                "DELETE /api/library/anime?path=...",
                 "GET /api/library/series",
                 "POST /api/library/series",
+                "DELETE /api/library/series?path=...",
                 "GET /api/torrents/tracked",
                 "POST /api/torrents/sync",
                 "POST /api/torrents/auto-add",
@@ -339,7 +431,25 @@ class JellyfinApi:
                 raise ApiError(502, error)
             return _ok(torrents or [])
         if route == ["torrents", "auto-add"]:
-            return _ok(auto_add_completed_torrents())
+            if _bool_query(self._first(query, "details"), default=False):
+                report = self.torrent_manager.auto_add_completed_torrents_report()
+                import_failures = [
+                    skipped
+                    for skipped in report.get("skipped", [])
+                    if str(skipped.get("reason", "")).lower().startswith(("could not create", "error adding", "existing movie library entry"))
+                ]
+                if import_failures:
+                    raise ApiError(500, import_failures[0].get("reason", "Library import failed"), {"auto_add": report})
+                return _ok(report)
+            report = self.torrent_manager.auto_add_completed_torrents_report()
+            import_failures = [
+                skipped
+                for skipped in report.get("skipped", [])
+                if str(skipped.get("reason", "")).lower().startswith(("could not create", "error adding", "existing movie library entry"))
+            ]
+            if import_failures:
+                raise ApiError(500, import_failures[0].get("reason", "Library import failed"), {"auto_add": report})
+            return _ok(report.get("added", []))
         if route == ["qbittorrent", "torrents"]:
             return self._add_qbittorrent_torrent(payload)
         if route == ["qbittorrent", "search"]:
@@ -354,6 +464,8 @@ class JellyfinApi:
         raise ApiError(404, "Unknown route")
 
     def _handle_delete(self, route: List[str], query: Dict[str, List[str]]) -> Tuple[int, Dict[str, Any]]:
+        if len(route) == 2 and route[0] == "library" and route[1] in {"movies", "anime", "series"}:
+            return self._delete_library_media(route[1], query)
         if len(route) == 2 and route[0] == "torrents":
             return self._delete_torrent(route[1], query)
         if len(route) == 3 and route[:2] == ["qbittorrent", "search"]:
@@ -362,6 +474,136 @@ class JellyfinApi:
                 raise ApiError(502, "Failed to delete qBittorrent search")
             return _ok({"deleted": True})
         raise ApiError(404, "Unknown route")
+
+    def _delete_library_media(self, kind: str, query: Dict[str, List[str]]) -> Tuple[int, Dict[str, Any]]:
+        target_path = _as_abs_path(self._required_query(query, "path"))
+        roots = [os.path.abspath(root) for root in _library_roots_for_kind(kind) if root]
+        if not roots or not any(_is_same_or_child_path(target_path, root) for root in roots):
+            raise ApiError(400, "Path is outside the configured library folders")
+        if not os.path.lexists(target_path):
+            raise ApiError(404, "Library path does not exist")
+
+        delete_source = _bool_query(self._first(query, "delete_source"), default=False)
+        tracking_payload = _load_track_file(target_path)
+        infohashes = set()
+        source_paths = []
+
+        def add_source(path_value: Any) -> None:
+            raw_path = str(path_value or "").strip().strip('"')
+            if not raw_path or raw_path.lower() in {"default", "unknown", "n/a"}:
+                return
+            source_path = _as_abs_path(raw_path)
+            if source_path and source_path not in source_paths:
+                source_paths.append(source_path)
+
+        if os.path.islink(target_path):
+            add_source(_resolve_symlink_target(target_path))
+
+        if os.path.isdir(target_path):
+            for root, dirs, files in os.walk(target_path):
+                for folder_name in list(dirs):
+                    link_path = os.path.join(root, folder_name)
+                    if os.path.islink(link_path):
+                        add_source(_resolve_symlink_target(link_path))
+                for file_name in files:
+                    link_path = os.path.join(root, file_name)
+                    if os.path.islink(link_path):
+                        add_source(_resolve_symlink_target(link_path))
+
+        track_infohash = str(tracking_payload.get("infohash", "") or "").strip().lower()
+        if INFOHASH_PATTERN.fullmatch(track_infohash):
+            infohashes.add(track_infohash)
+        add_source(tracking_payload.get("source_download_path") or tracking_payload.get("download_path"))
+        add_source(tracking_payload.get("qb_content_path"))
+
+        for torrent in get_tracked_torrents():
+            library_path = _as_abs_path(str(torrent.get("library_path", "") or ""))
+            if library_path and (_is_same_or_child_path(library_path, target_path) or _is_same_or_child_path(target_path, library_path)):
+                torrent_infohash = str(torrent.get("infohash", "") or "").strip().lower()
+                if INFOHASH_PATTERN.fullmatch(torrent_infohash):
+                    infohashes.add(torrent_infohash)
+                add_source(torrent.get("source_download_path") or torrent.get("download_path"))
+                add_source(torrent.get("qb_content_path"))
+
+        if delete_source and not infohashes and source_paths:
+            session = self._qb_session()
+            for qb_torrent in qb_get_torrent_info(session):
+                torrent_hash = str(qb_torrent.get("hash", "") or "").strip().lower()
+                if not INFOHASH_PATTERN.fullmatch(torrent_hash):
+                    continue
+                qb_paths = [
+                    qb_torrent.get("content_path"),
+                    qb_torrent.get("root_path"),
+                ]
+                save_path = str(qb_torrent.get("save_path", "") or "").strip()
+                name = str(qb_torrent.get("name", "") or "").strip()
+                if save_path and name:
+                    qb_paths.append(os.path.join(save_path, name))
+                normalized_qb_paths = [_as_abs_path(str(path or "")) for path in qb_paths if str(path or "").strip()]
+                if any(
+                    _is_same_or_child_path(source_path, qb_path) or _is_same_or_child_path(qb_path, source_path)
+                    for source_path in source_paths
+                    for qb_path in normalized_qb_paths
+                ):
+                    infohashes.add(torrent_hash)
+
+        deleted_sources = []
+        skipped_sources = []
+        removed_from_qbittorrent = []
+        if delete_source:
+            if infohashes:
+                session = self._qb_session()
+                qb_torrents_by_hash = {
+                    str(qb_torrent.get("hash", "") or "").strip().lower(): qb_torrent
+                    for qb_torrent in qb_get_torrent_info(session)
+                    if str(qb_torrent.get("hash", "") or "").strip()
+                }
+                for infohash in sorted(infohashes):
+                    qb_torrent = qb_torrents_by_hash.get(infohash)
+                    if not qb_torrent:
+                        raise ApiError(404, "Tracked torrent was not found in qBittorrent", {"infohash": infohash})
+                    add_source(qb_torrent.get("content_path"))
+                    add_source(qb_torrent.get("root_path"))
+                    save_path = str(qb_torrent.get("save_path", "") or "").strip()
+                    name = str(qb_torrent.get("name", "") or "").strip()
+                    if save_path and name:
+                        add_source(os.path.join(save_path, name))
+                    if not qb_remove_torrent(session, infohash, delete_files=True):
+                        raise ApiError(502, "Failed to remove torrent from qBittorrent", {"infohash": infohash})
+                    removed_from_qbittorrent.append(infohash)
+
+            for source_path in ([] if removed_from_qbittorrent else source_paths):
+                if not os.path.exists(source_path):
+                    skipped_sources.append({"path": source_path, "reason": "not found"})
+                    continue
+                if any(_is_same_or_child_path(source_path, root) for root in roots):
+                    skipped_sources.append({"path": source_path, "reason": "inside library folder"})
+                    continue
+                try:
+                    _delete_path(source_path)
+                    deleted_sources.append(source_path)
+                except OSError as exc:
+                    raise ApiError(500, "Failed to delete source from disk", {"path": source_path, "error": str(exc)})
+
+        try:
+            _delete_path(target_path)
+        except OSError as exc:
+            raise ApiError(500, "Failed to delete library media", {"path": target_path, "error": str(exc)})
+
+        removed_from_database = 0
+        for infohash in sorted(infohashes):
+            removed_from_database += remove_torrent_from_database_by_infohash(infohash)
+
+        return _ok(
+            {
+                "deleted_library_path": target_path,
+                "delete_source": delete_source,
+                "removed_from_qbittorrent": removed_from_qbittorrent,
+                "deleted_sources": deleted_sources,
+                "skipped_sources": skipped_sources,
+                "removed_from_database": removed_from_database,
+            }
+        )
 
     def _add_movie(self, payload: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
         movie_path = _as_abs_path(_required_str(payload, "path"))
@@ -440,12 +682,11 @@ class JellyfinApi:
             for torrent in qb_get_torrent_info(session)
             if str(torrent.get("hash", "") or "").strip()
         }
-        if not qb_add_torrent(session, torrent_url, download_path):
-            raise ApiError(502, "Failed to add torrent to qBittorrent")
-
-        after_torrents = qb_get_torrent_info(session)
         title = str(payload.get("title", "") or "").strip()
-        infohash = _find_new_torrent_hash(before_hashes, after_torrents, torrent_url, title)
+        added_to_qb = qb_add_torrent(session, torrent_url, download_path)
+        infohash = _wait_for_torrent_hash(session, before_hashes, torrent_url, title)
+        if not added_to_qb and not INFOHASH_PATTERN.fullmatch(infohash or ""):
+            raise ApiError(502, "Failed to add torrent to qBittorrent")
         tracked = False
         torrent_id = None
         if bool(payload.get("track", True)) and INFOHASH_PATTERN.fullmatch(infohash or ""):
@@ -487,27 +728,133 @@ class JellyfinApi:
         delete_files = _bool_query(self._first(query, "delete_files"), default=False)
         delete_library = _bool_query(self._first(query, "delete_library"), default=False)
         session = self._qb_session()
+        matching_torrents = [
+            torrent
+            for torrent in get_tracked_torrents()
+            if str(torrent.get("infohash", "") or "").strip().lower() == normalized_hash
+        ]
+        if delete_library and not matching_torrents:
+            raise ApiError(404, "Tracked torrent was not found")
+
+        normalized_library_paths = {
+            os.path.normcase(os.path.abspath(str(torrent.get("library_path", "") or "").strip()))
+            for torrent in matching_torrents
+            if str(torrent.get("library_path", "") or "").strip()
+        }
+        if delete_library and len(normalized_library_paths) > 1:
+            raise ApiError(409, "Duplicate torrent tracking rows reference different library paths")
+
+        def tracked_row_priority(torrent: Dict[str, Any]) -> Tuple[int, int]:
+            has_library_path = 1 if str(torrent.get("library_path", "") or "").strip() else 0
+            try:
+                torrent_id = int(torrent.get("id", 0))
+            except (TypeError, ValueError):
+                torrent_id = 0
+            return has_library_path, torrent_id
+
+        matching_torrent = max(matching_torrents, key=tracked_row_priority) if matching_torrents else None
+        cleanup_retry = bool(
+            matching_torrent
+            and str(matching_torrent.get("status", "") or "").lower() == "deletion_pending"
+        )
+
+        additional_source_paths = []
+        cleanup_plan = None
+        qb_torrent = None
+        if delete_library and matching_torrent:
+            qb_torrent = next(
+                (
+                    torrent
+                    for torrent in qb_get_torrent_info(session)
+                    if str(torrent.get("hash", "") or "").strip().lower() == normalized_hash
+                ),
+                None,
+            )
+            if qb_torrent:
+                content_path = str(qb_torrent.get("content_path", "") or "").strip()
+                if content_path:
+                    additional_source_paths.append(content_path)
+                else:
+                    save_path = str(qb_torrent.get("save_path", "") or "").strip()
+                    torrent_name = str(qb_torrent.get("name", "") or "").strip()
+                    if save_path and torrent_name:
+                        additional_source_paths.append(os.path.join(save_path, torrent_name))
+            if not additional_source_paths:
+                for tracked_torrent in matching_torrents:
+                    additional_source_paths.extend([
+                        tracked_torrent.get("source_download_path"),
+                        tracked_torrent.get("download_path"),
+                        tracked_torrent.get("qb_content_path"),
+                    ])
+            try:
+                cleanup_plan = self.torrent_manager.plan_torrent_library_cleanup(
+                    matching_torrent,
+                    additional_source_paths=additional_source_paths,
+                )
+            except ValueError as exc:
+                raise ApiError(400, str(exc)) from exc
+            except OSError as exc:
+                raise ApiError(500, "Could not inspect related library files", {"error": str(exc)}) from exc
+
+            was_imported = any(
+                str(tracked_torrent.get("status", "") or "").lower() == "added_to_library"
+                or bool(str(tracked_torrent.get("library_path", "") or "").strip())
+                for tracked_torrent in matching_torrents
+            )
+            planned_library_path = str(cleanup_plan.get("library_path", "") or "")
+            if (
+                was_imported
+                and planned_library_path
+                and os.path.lexists(planned_library_path)
+                and not cleanup_plan.get("linked_paths")
+                and not cleanup_retry
+            ):
+                raise ApiError(409, "No related library links were found; torrent was not deleted")
+
+        status_marked_for_cleanup = False
+        previous_status = ""
+        if delete_library and matching_torrent and cleanup_plan and cleanup_plan.get("library_path"):
+            previous_status = str(matching_torrent.get("status", "") or "")
+            if cleanup_retry:
+                status_marked_for_cleanup = True
+            else:
+                torrent_id = matching_torrent.get("id")
+                if torrent_id is None or not update_torrent_status(torrent_id, "deletion_pending"):
+                    raise ApiError(500, "Could not mark torrent for library cleanup")
+                status_marked_for_cleanup = True
+
         removed_from_qb = qb_remove_torrent(session, normalized_hash, delete_files=delete_files)
         if not removed_from_qb:
+            if status_marked_for_cleanup and not cleanup_retry:
+                update_torrent_status(matching_torrent.get("id"), previous_status)
             raise ApiError(502, "Failed to remove torrent from qBittorrent")
 
-        removed_from_database = 0
-        removed_library = False
-        matching_torrent = next(
-            (torrent for torrent in get_tracked_torrents() if str(torrent.get("infohash", "")).lower() == normalized_hash),
-            None,
-        )
+        library_cleanup = None
         if delete_library and matching_torrent:
-            removed_library = self.torrent_manager.remove_torrent_and_library_entry(matching_torrent)
-            removed_from_database = 1 if removed_library else 0
-        else:
-            removed_from_database = remove_torrent_from_database_by_infohash(normalized_hash)
+            library_cleanup = self.torrent_manager.remove_torrent_library_files(
+                matching_torrent,
+                additional_source_paths=additional_source_paths,
+                cleanup_plan=cleanup_plan,
+            )
+            if not library_cleanup.get("success"):
+                raise ApiError(
+                    500,
+                    "Torrent was removed from qBittorrent, but related library files could not be removed",
+                    {"library_cleanup": library_cleanup},
+                )
+
+        removed_from_database = remove_torrent_from_database_by_infohash(normalized_hash)
 
         return _ok(
             {
                 "removed_from_qbittorrent": removed_from_qb,
                 "removed_from_database": removed_from_database,
-                "removed_library": removed_library,
+                "removed_library": bool(library_cleanup and (
+                    library_cleanup.get("removed_links")
+                    or library_cleanup.get("removed_sidecars")
+                    or library_cleanup.get("removed_library_root")
+                )),
+                "library_cleanup": library_cleanup,
                 "delete_files": delete_files,
             }
         )

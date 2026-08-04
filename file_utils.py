@@ -4,6 +4,7 @@ File system utilities for the Jellyfin Library Manager.
 
 import os
 import glob
+import json
 import shutil
 from typing import List, Tuple, Optional
 from utils import is_video_file, get_all_media_folders, get_anime_folder, get_series_folder
@@ -26,6 +27,7 @@ def find_existing_symlink(movie_path: str, media_folders: List[str]) -> Tuple[Op
 def list_movies() -> List[Tuple[str, str, str]]:
     """List all movies in the Jellyfin library. Returns list of (name, symlink_path, target_path)."""
     movies = []
+    seen_movie_folders = set()
     media_folders = get_all_media_folders()
     
     for media_folder in media_folders:
@@ -40,10 +42,26 @@ def list_movies() -> List[Tuple[str, str, str]]:
                         target = os.readlink(file_path)
                         movie_name = os.path.splitext(file)[0]
                         movies.append((movie_name, file_path, target))
+                        seen_movie_folders.add(root)
                     except OSError:
                         # Broken symlink
                         movie_name = os.path.splitext(file)[0]
                         movies.append((movie_name, file_path, "BROKEN LINK"))
+                        seen_movie_folders.add(root)
+            if root != media_folder and root not in seen_movie_folders and "track.json" in files:
+                track_path = os.path.join(root, "track.json")
+                try:
+                    with open(track_path, "r", encoding="utf-8") as file_handle:
+                        tracking_payload = json.load(file_handle)
+                    if isinstance(tracking_payload, dict) and tracking_payload.get("media_type") == "movie":
+                        movie_name = tracking_payload.get("media_metadata", {}).get("title") or os.path.basename(root)
+                        target = tracking_payload.get("source_download_path") or tracking_payload.get("download_path") or "NO_SYMLINKS"
+                        movies.append((movie_name, root, target))
+                        seen_movie_folders.add(root)
+                except (OSError, json.JSONDecodeError):
+                    movie_name = os.path.basename(root)
+                    movies.append((movie_name, root, "NO_SYMLINKS"))
+                    seen_movie_folders.add(root)
     
     return sorted(movies, key=lambda x: x[0].lower())
 
