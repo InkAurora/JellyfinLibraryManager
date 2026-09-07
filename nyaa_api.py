@@ -5,11 +5,17 @@ Nyaa.si API integration for torrent search functionality.
 import requests
 import urllib.parse
 import feedparser
-import msvcrt
 from typing import List, Dict, Any, Optional, Union
 from bs4 import BeautifulSoup
 from utils import clear_screen, parse_size
-from ui import MenuSystem
+
+
+def _windows_console():
+    try:
+        import msvcrt
+    except ModuleNotFoundError as error:
+        raise RuntimeError("Interactive Nyaa browsing requires a Windows console") from error
+    return msvcrt
 
 
 class NyaaAPI:
@@ -62,6 +68,9 @@ class NyaaAPI:
         """Allow user to navigate nyaa.si results with shortcuts and select one."""
         if not results:
             return None
+
+        _windows_console()
+        from ui import MenuSystem
 
         def _seeds(item: Dict[str, Any]) -> int:
             try:
@@ -169,6 +178,7 @@ class NyaaAPI:
     
     def show_torrent_file_tree(self, torrent_page_url: str, rss_info: Optional[Dict[str, Any]] = None) -> bool:
         """Show the file tree for a torrent, allow Esc to return or 'd' to download."""
+        msvcrt = _windows_console()
         file_tree = self.get_torrent_file_list(torrent_page_url)
         clear_screen()
         print("Torrent Info:")

@@ -9,7 +9,6 @@ import requests
 from bs4 import BeautifulSoup
 
 from config import IMDB_FIND_BASE_URL, IMDB_SUGGEST_BASE_URL
-from ui import MenuSystem
 from utils import clear_screen
 
 
@@ -29,7 +28,19 @@ class IMDBAPI:
     }
 
     def __init__(self):
-        self.menu_system = MenuSystem()
+        self._menu_system = None
+
+    @property
+    def menu_system(self):
+        if self._menu_system is None:
+            try:
+                from ui import MenuSystem
+            except ModuleNotFoundError as error:
+                if error.name == "msvcrt":
+                    raise RuntimeError("Interactive IMDb search requires a Windows console") from error
+                raise
+            self._menu_system = MenuSystem()
+        return self._menu_system
 
     @staticmethod
     def _parse_year(value: Any) -> str:

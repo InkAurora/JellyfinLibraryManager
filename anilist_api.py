@@ -5,9 +5,16 @@ AniList API integration for anime search functionality.
 import requests
 import time
 import threading
-import msvcrt
 from typing import List, Tuple, Optional, Union
 from utils import clear_screen, wait_for_enter
+
+
+def _windows_console():
+    try:
+        import msvcrt
+    except ModuleNotFoundError as error:
+        raise RuntimeError("Interactive AniList search requires a Windows console") from error
+    return msvcrt
 
 
 class AniListAPI:
@@ -59,6 +66,7 @@ class AniListAPI:
     
     def interactive_search(self) -> Optional[Tuple[str, int, int]]:
         """Interactive search for anime using AniList API with pause detection and improved UX."""
+        msvcrt = _windows_console()
         prompt = "Type the anime name (Esc to cancel):"
         input_str = ''
         last_time = time.time()
