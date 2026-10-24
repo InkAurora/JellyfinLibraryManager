@@ -2,6 +2,8 @@
 Configuration settings for the Jellyfin Library Manager.
 """
 
+import os
+
 # qBittorrent API configuration
 QBITTORRENT_HOST = "localhost:1337"
 QBITTORRENT_URL = f"http://{QBITTORRENT_HOST}"
@@ -9,9 +11,14 @@ QBITTORRENT_USERNAME = "admin"
 QBITTORRENT_PASSWORD = ""
 
 # Media folder paths
-MEDIA_FOLDERS = [r"/home/ink/Media", r"/run/media/ink/HDD/Media"]
-ANIME_FOLDER = r"/run/media/ink/HDD/Anime"
-SERIES_FOLDER = r"/run/media/ink/HDD/Series"
+if os.name == "nt":
+    MEDIA_FOLDERS = [r"C:\Media", r"D:\Media"]
+    ANIME_FOLDER = r"D:\Anime"
+    SERIES_FOLDER = r"D:\Series"
+else:
+    MEDIA_FOLDERS = [r"/home/ink/Media", r"/run/media/ink/HDD/Media"]
+    ANIME_FOLDER = r"/run/media/ink/HDD/Anime"
+    SERIES_FOLDER = r"/run/media/ink/HDD/Series"
 
 # Metadata provider configuration
 # Supported: "imdb"

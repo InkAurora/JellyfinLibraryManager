@@ -892,6 +892,7 @@ class JellyfinApi:
 class ApiRequestHandler(BaseHTTPRequestHandler):
     """HTTP request adapter."""
 
+    protocol_version = "HTTP/1.1"
     api = JellyfinApi()
 
     def do_OPTIONS(self) -> None:
@@ -954,8 +955,14 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
         print(f"{self.address_string()} - {fmt % args}")
 
 
+class LibraryManagerHttpServer(ThreadingHTTPServer):
+    """Keep Windows from distributing one port across stale API processes."""
+
+    allow_reuse_address = os.name != "nt"
+
+
 def run_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
-    server = ThreadingHTTPServer((host, port), ApiRequestHandler)
+    server = LibraryManagerHttpServer((host, port), ApiRequestHandler)
     print(f"Jellyfin Library Manager API listening on http://{host}:{port}")
     print("Press Ctrl+C to stop.")
     try:
