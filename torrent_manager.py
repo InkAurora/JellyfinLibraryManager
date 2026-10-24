@@ -20,6 +20,14 @@ from utils import (
 )
 from file_utils import create_movie_symlink
 from ffprobe_utils import probe_video_duration
+from episode_naming import (
+    EXTRAS_FOLDER_NAME,
+    is_extra_video,
+    is_extras_folder,
+    is_specials_name,
+    plan_episode_link_names,
+    season_number_in_name,
+)
 
 
 _library_file_lock = threading.RLock()
@@ -317,19 +325,19 @@ class TorrentManager:
         else:
             library_base_folder = get_anime_folder()
         library_main_folder = os.path.join(library_base_folder, media_title)
+        extras_folder = os.path.join(library_main_folder, EXTRAS_FOLDER_NAME)
         file_structure = {'root': library_main_folder, 'folders': []}
-        # Helper regexes
-        season_regex = re.compile(r'(season[ _-]?(\d+)|s(\d{1,2}))(?!\d)', re.IGNORECASE)
-        episode_season_regex = re.compile(r'(^|[^\d])(\d{1,2})[xX]\d{1,3}([^\d]|$)')
-        specials_regex = re.compile(r'(special|extra|ova|sp|nced|ncop|s00)', re.IGNORECASE)
         # Walk torrent folders, or treat a single-file torrent as a one-item folder.
         folder_map = {}
+        season_by_folder: Dict[str, int] = {}
         if os.path.isfile(download_path):
             walk_root = os.path.dirname(download_path)
             walk_entries = [(walk_root, [], [os.path.basename(download_path)])]
+            root_season = None
         else:
             walk_root = download_path
             walk_entries = os.walk(download_path)
+            root_season = season_number_in_name(os.path.basename(os.path.normpath(download_path)))
 
         for root, dirs, files in walk_entries:
             rel_root = os.path.relpath(root, walk_root)
@@ -346,54 +354,36 @@ class TorrentManager:
                     movies_folder = os.path.join(library_main_folder, 'Movies')
                     folder_map.setdefault(movies_folder, []).append({'source': file_path, 'target': os.path.join(movies_folder, file)})
                     continue
-                # Find best matching folder for season/specials
-                best_folder = None
-                best_type = None
+                # Openings, endings, previews and menus are Jellyfin extras, not episodes.
+                if is_extra_video(file) or any(is_extras_folder(part) for part in rel_parts):
+                    extra_name = " - ".join(rel_parts + [file])
+                    folder_map.setdefault(extras_folder, []).append({'source': file_path, 'target': os.path.join(extras_folder, extra_name)})
+                    continue
+                # Season from the deepest matching subfolder, then the file name, then the torrent folder.
                 best_season = None
-                # Check all parent folders, deepest first
-                for i in range(len(rel_parts), 0, -1):
-                    folder_name = rel_parts[i-1]
-                    # Season
-                    season_match = season_regex.search(folder_name)
-                    if season_match:
-                            season_num = season_match.group(2) or season_match.group(3)
-                            if season_num:
-                                season_folder = os.path.join(library_main_folder, f'Season {int(season_num):02d}')
-                                best_folder = season_folder
-                                best_type = 'season'
-                                best_season = int(season_num)
-                                break
-                    # Specials
-                    if specials_regex.search(folder_name):
-                        specials_folder = os.path.join(library_main_folder, 'Season 00')
-                        best_folder = specials_folder
-                        best_type = 'specials'
+                for folder_name in reversed(rel_parts):
+                    best_season = season_number_in_name(folder_name)
+                    if best_season is not None:
                         break
-                # If not found by folder, try file name
-                if not best_folder:
-                    episode_season_match = episode_season_regex.search(file)
-                    if episode_season_match:
-                        best_season = int(episode_season_match.group(2))
-                        best_folder = os.path.join(library_main_folder, f'Season {best_season:02d}')
-                        best_type = 'season'
-                    # Season in file name
-                    season_match = season_regex.search(file)
-                    if not best_folder and season_match:
-                        season_num = season_match.group(2) or season_match.group(3)
-                        if season_num:
-                            best_folder = os.path.join(library_main_folder, f'Season {int(season_num):02d}')
-                            best_type = 'season'
-                            best_season = int(season_num)
-                    # Specials in file name
-                    elif specials_regex.search(file):
-                        best_folder = os.path.join(library_main_folder, 'Season 00')
-                        best_type = 'specials'
-                # Default to Season 01
-                if not best_folder:
-                    best_folder = os.path.join(library_main_folder, 'Season 01')
-                    best_type = 'season'
-                    best_season = 1
+                    if is_specials_name(folder_name):
+                        best_season = 0
+                        break
+                if best_season is None:
+                    best_season = season_number_in_name(file)
+                if best_season is None and is_specials_name(file):
+                    best_season = 0
+                if best_season is None:
+                    best_season = root_season if root_season is not None else 1
+                best_folder = os.path.join(library_main_folder, f'Season {best_season:02d}')
+                season_by_folder[best_folder] = best_season
                 folder_map.setdefault(best_folder, []).append({'source': file_path, 'target': os.path.join(best_folder, file)})
+        # Give episodes clean SxxEyy names; keep the release name as the fallback.
+        for folder, season_number in season_by_folder.items():
+            files = folder_map[folder]
+            link_names = plan_episode_link_names([entry['source'] for entry in files], media_title, season_number)
+            for entry in files:
+                entry['fallback_target'] = entry['target']
+                entry['target'] = os.path.join(folder, link_names[entry['source']])
         # Build file_structure
         for folder, files in folder_map.items():
             file_structure['folders'].append({'path': folder, 'files': files})
@@ -418,15 +408,19 @@ class TorrentManager:
                     print(f"❌ Error creating folder '{folder['path']}': {e}")
                     return False
                 for file_entry in folder['files']:
-                    if os.path.exists(file_entry['target']):
+                    target = file_entry['target']
+                    fallback_target = file_entry.get('fallback_target')
+                    if fallback_target and os.path.lexists(target) and not self._is_link_to(target, file_entry['source']):
+                        target = fallback_target
+                    if os.path.exists(target):
                         linked_or_existing_files += 1
                         continue
                     try:
-                        os.symlink(file_entry['source'], file_entry['target'])
+                        os.symlink(file_entry['source'], target)
                         linked_or_existing_files += 1
                     except Exception as e:
-                        failed_links.append(f"{file_entry['target']}: {e}")
-                        print(f"⚠️  Warning: Could not create symlink for '{file_entry['target']}': {e}")
+                        failed_links.append(f"{target}: {e}")
+                        print(f"⚠️  Warning: Could not create symlink for '{target}': {e}")
             if failed_links:
                 self.last_import_error = f"Could not create {len(failed_links)} symlink(s). First error: {failed_links[0]}"
                 return False
@@ -568,6 +562,16 @@ class TorrentManager:
             target = os.path.join(os.path.dirname(link_path), target)
         return target
 
+    @classmethod
+    def _is_link_to(cls, link_path: str, source_path: str) -> bool:
+        if not os.path.islink(link_path):
+            return False
+        try:
+            target_path = cls._resolve_library_symlink_target(link_path)
+        except OSError:
+            return False
+        return cls._canonical_cleanup_path(target_path) == cls._canonical_cleanup_path(source_path)
+
     @staticmethod
     def _is_episode_sidecar(file_name: str, video_stem: str) -> bool:
         """Match Jellyfin-generated files that belong to one linked video."""
@@ -624,6 +628,11 @@ class TorrentManager:
             ".nfo", ".jpg", ".jpeg", ".png", ".webp", ".bif",
         }
 
+    @staticmethod
+    def _is_episode_group_folder(name: str) -> bool:
+        normalized = name.lower()
+        return normalized.startswith("season ") or normalized == EXTRAS_FOLDER_NAME
+
     def _contains_only_jellyfin_metadata(self, path: str, allow_season_folders: bool = False) -> bool:
         if not os.path.isdir(path):
             return False
@@ -635,7 +644,7 @@ class TorrentManager:
                     return False
                 if self._is_jellyfin_metadata_name(directory, is_directory=True):
                     continue
-                if allow_season_folders and root == path and directory.lower().startswith("season "):
+                if allow_season_folders and root == path and self._is_episode_group_folder(directory):
                     retained_dirs.append(directory)
                     continue
                 return False
@@ -894,7 +903,7 @@ class TorrentManager:
                         season_paths = {
                             os.path.dirname(video_link)
                             for video_link in plan["video_links"]
-                            if os.path.basename(os.path.dirname(video_link)).lower().startswith("season ")
+                            if self._is_episode_group_folder(os.path.basename(os.path.dirname(video_link)))
                         }
                         for season_path in sorted(season_paths, key=lambda candidate: candidate.count(os.sep), reverse=True):
                             if (

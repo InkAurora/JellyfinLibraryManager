@@ -9,6 +9,30 @@ import shutil
 from typing import List, Tuple, Optional
 from utils import is_video_file, get_all_media_folders, get_anime_folder, get_series_folder
 from config import JELLYFIN_CLEANUP_EXTENSIONS
+from episode_naming import EXTRAS_FOLDER_NAME, is_extra_video, is_extras_folder, plan_episode_link_names
+
+
+def _season_link_targets(source_folder: str, episode_files: List[str], main_folder: str,
+                         season_folder: str, season_number: int, show_name: str) -> List[Tuple[str, str]]:
+    """Return (source, link) pairs for top-level files: extras go to extras/, episodes get SxxEyy names."""
+    extras_folder = os.path.join(main_folder, EXTRAS_FOLDER_NAME)
+    episode_sources = [os.path.join(source_folder, f) for f in episode_files if not is_extra_video(f)]
+    link_names = plan_episode_link_names(episode_sources, show_name, season_number)
+    pairs = []
+    for episode_file in episode_files:
+        source_file = os.path.join(source_folder, episode_file)
+        if source_file in link_names:
+            pairs.append((source_file, os.path.join(season_folder, link_names[source_file])))
+        else:
+            pairs.append((source_file, os.path.join(extras_folder, episode_file)))
+    return pairs
+
+
+def _subfolder_link_folder(main_folder: str, folder_name: str, video_file: str) -> str:
+    """Extras subfolders and OP/ED files go to extras/; other subfolder videos stay specials."""
+    if is_extras_folder(folder_name) or is_extra_video(video_file):
+        return os.path.join(main_folder, EXTRAS_FOLDER_NAME)
+    return os.path.join(main_folder, "Season 00")
 
 
 def find_existing_symlink(movie_path: str, media_folders: List[str]) -> Tuple[Optional[str], Optional[str]]:
@@ -259,35 +283,35 @@ def create_anime_symlinks(anime_folder_path: str, anime_name: str, season_number
         
         # Create symlinks for individual episode files
         episode_files_linked = 0
-        for episode_file in episode_files:
-            source_file = os.path.join(anime_folder_path, episode_file)
-            target_file = os.path.join(season_folder, episode_file)
-            
-            try:
-                os.symlink(source_file, target_file)
-                episode_files_linked += 1
-            except Exception as e:
-                print(f"⚠️  Warning: Could not create symlink for episode '{episode_file}': {e}")
-        
-        # Create Season 00 symlinks for individual video files from extras folders
         extras_linked = 0
-        for folder_name, folder_path, video_count in extras_folders:
-            extras_season_folder = os.path.join(anime_main_folder, "Season 00")
-            
+        for source_file, target_file in _season_link_targets(
+                anime_folder_path, episode_files, anime_main_folder, season_folder, season_number, anime_name):
             try:
-                os.makedirs(extras_season_folder, exist_ok=True)
-                
+                os.makedirs(os.path.dirname(target_file), exist_ok=True)
+                os.symlink(source_file, target_file)
+                if os.path.dirname(target_file) == season_folder:
+                    episode_files_linked += 1
+                else:
+                    extras_linked += 1
+            except Exception as e:
+                print(f"⚠️  Warning: Could not create symlink for episode '{os.path.basename(source_file)}': {e}")
+
+        # Create Season 00 or extras symlinks for individual video files from subfolders
+        for folder_name, folder_path, video_count in extras_folders:
+            try:
                 # Get all video files from the extras folder
-                video_files = [f for f in os.listdir(folder_path) 
+                video_files = [f for f in os.listdir(folder_path)
                              if os.path.isfile(os.path.join(folder_path, f)) and is_video_file(f)]
-                
-                # Create symlinks for each video file directly in Season 00
+
+                # Create symlinks for each video file directly in Season 00 or extras
                 for video_file in video_files:
                     source_file = os.path.join(folder_path, video_file)
+                    extras_season_folder = _subfolder_link_folder(anime_main_folder, folder_name, video_file)
+                    os.makedirs(extras_season_folder, exist_ok=True)
                     # Use folder name as prefix to avoid conflicts
                     target_filename = f"{folder_name} - {video_file}"
                     extras_symlink = os.path.join(extras_season_folder, target_filename)
-                    
+
                     try:
                         os.symlink(source_file, extras_symlink)
                         extras_linked += 1
@@ -329,24 +353,27 @@ def create_series_symlinks(series_folder_path: str, series_name: str, season_num
         os.makedirs(season_folder, exist_ok=True)
 
         episode_files_linked = 0
-        for episode_file in episode_files:
-            source_file = os.path.join(series_folder_path, episode_file)
-            target_file = os.path.join(season_folder, episode_file)
-            try:
-                os.symlink(source_file, target_file)
-                episode_files_linked += 1
-            except Exception as e:
-                print(f"⚠️  Warning: Could not create symlink for episode '{episode_file}': {e}")
-
         extras_linked = 0
-        for folder_name, folder_path, _ in extras_folders:
-            extras_season_folder = os.path.join(series_main_folder, "Season 00")
+        for source_file, target_file in _season_link_targets(
+                series_folder_path, episode_files, series_main_folder, season_folder, season_number, series_name):
             try:
-                os.makedirs(extras_season_folder, exist_ok=True)
+                os.makedirs(os.path.dirname(target_file), exist_ok=True)
+                os.symlink(source_file, target_file)
+                if os.path.dirname(target_file) == season_folder:
+                    episode_files_linked += 1
+                else:
+                    extras_linked += 1
+            except Exception as e:
+                print(f"⚠️  Warning: Could not create symlink for episode '{os.path.basename(source_file)}': {e}")
+
+        for folder_name, folder_path, _ in extras_folders:
+            try:
                 video_files = [f for f in os.listdir(folder_path)
                              if os.path.isfile(os.path.join(folder_path, f)) and is_video_file(f)]
                 for video_file in video_files:
                     source_file = os.path.join(folder_path, video_file)
+                    extras_season_folder = _subfolder_link_folder(series_main_folder, folder_name, video_file)
+                    os.makedirs(extras_season_folder, exist_ok=True)
                     target_filename = f"{folder_name} - {video_file}"
                     extras_symlink = os.path.join(extras_season_folder, target_filename)
                     try:
